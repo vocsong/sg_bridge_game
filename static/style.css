@@ -847,3 +847,82 @@ html, body {
 .screen.active > * {
   animation: fadeIn 0.3s ease-out;
 }
+
+/* Auth UI */
+.auth-status {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+.auth-status a {
+  color: rgba(255, 255, 255, 0.5);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+#telegram-widget-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+  min-height: 48px;
+}
+
+/* Leaderboard */
+.lb-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.lb-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #d4a843;
+  margin-bottom: 0.75rem;
+  text-align: center;
+}
+
+.lb-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  font-size: 0.9rem;
+}
+
+.lb-rank {
+  width: 2rem;
+  text-align: center;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.lb-name {
+  flex: 1;
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lb-stats {
+  color: #d4a843;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.lb-me .lb-name {
+  font-weight: 600;
+  color: #fff;
+}
+
+.lb-divider {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 0.4rem 0;
+}

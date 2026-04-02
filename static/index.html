@@ -32,21 +32,34 @@
       <h1>♠♥ Floating Bridge ♦♣</h1>
       <p class="subtitle">Singaporean Card Game</p>
 
-      <div class="form-group">
-        <label for="input-name">Your Name</label>
-        <input type="text" id="input-name" placeholder="Enter your name" maxlength="20" autocomplete="off">
+      <div id="leaderboard-section"></div>
+
+      <!-- Telegram login section (shown when not logged in) -->
+      <div id="login-section">
+        <div id="telegram-widget-container"></div>
+        <button id="btn-guest" class="btn btn-ghost">Continue as Guest</button>
       </div>
 
-      <button id="btn-create" class="btn btn-primary">Create Game</button>
+      <!-- Game section (shown after login or as guest) -->
+      <div id="game-section" class="hidden">
+        <div id="auth-status" class="auth-status"></div>
 
-      <div class="divider"><span>or</span></div>
+        <div class="form-group">
+          <label for="input-name">Your Name</label>
+          <input type="text" id="input-name" placeholder="Enter your name" maxlength="20" autocomplete="off">
+        </div>
 
-      <div class="form-group">
-        <label for="input-room">Room Code</label>
-        <input type="text" id="input-room" placeholder="e.g. AB12" maxlength="4" autocomplete="off" style="text-transform:uppercase">
+        <button id="btn-create" class="btn btn-primary">Create Game</button>
+
+        <div class="divider"><span>or</span></div>
+
+        <div class="form-group">
+          <label for="input-room">Room Code</label>
+          <input type="text" id="input-room" placeholder="e.g. AB12" maxlength="4" autocomplete="off" style="text-transform:uppercase">
+        </div>
+
+        <button id="btn-join" class="btn btn-secondary">Join Game</button>
       </div>
-
-      <button id="btn-join" class="btn btn-secondary">Join Game</button>
     </div>
   </div>
 

@@ -1,3 +1,5 @@
+import type { D1Database, DurableObjectNamespace } from '@cloudflare/workers-types';
+
 export type Suit = '♣' | '♦' | '♥' | '♠';
 export type BidSuit = Suit | '🚫';
 
@@ -66,6 +68,10 @@ export interface PlayerGameView {
 
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
+  DB: D1Database;
+  JWT_SECRET: string;
+  TELEGRAM_BOT_TOKEN: string;
+  TELEGRAM_BOT_USERNAME: string;
 }
 
 export const NUM_PLAYERS = 4;

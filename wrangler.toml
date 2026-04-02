@@ -1,4 +1,4 @@
-name = "sgbridgebot"
+name = "sg_bridge_bot"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
@@ -13,3 +13,11 @@ class_name = "GameRoom"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GameRoom"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sg-bridge-users"
+database_id = "d8abefe8-ef5f-47a0-9ba8-9d4dfc72a2af"
+
+[vars]
+TELEGRAM_BOT_USERNAME = "funCentral_bot"

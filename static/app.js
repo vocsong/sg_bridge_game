@@ -36,9 +36,139 @@ let reconnectDelay = 2000;
 let gameState = null;
 let lastGameOver = null;
 
+// Auth state
+let authToken = localStorage.getItem('authToken') || null;
+let authDisplayName = null; // name from /api/me, null for guests
+
 // --- DOM refs ---
 const $ = (id) => document.getElementById(id);
 const screens = document.querySelectorAll('.screen');
+
+// --- Leaderboard ---
+
+async function loadLeaderboard() {
+  try {
+    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+    const res = await fetch('/api/leaderboard', { headers });
+    if (!res.ok) return;
+    renderLeaderboard(await res.json());
+  } catch { /* non-critical — silent fail */ }
+}
+
+function renderLeaderboard(data) {
+  const section = document.getElementById('leaderboard-section');
+  if (!section) return;
+  if (!data.top || data.top.length === 0) {
+    section.innerHTML = '';
+    return;
+  }
+  const medals = ['🥇', '🥈', '🥉', '', ''];
+  let rows = data.top.map((e) =>
+    `<div class="lb-row">
+      <span class="lb-rank">${medals[e.rank - 1] || '#' + e.rank}</span>
+      <span class="lb-name">${esc(e.displayName)}</span>
+      <span class="lb-stats">${e.wins}W / ${e.gamesPlayed}G</span>
+    </div>`
+  ).join('');
+  if (data.me) {
+    rows += `<div class="lb-divider"></div>
+    <div class="lb-row lb-me">
+      <span class="lb-rank">#${data.me.rank}</span>
+      <span class="lb-name">You</span>
+      <span class="lb-stats">${data.me.wins}W / ${data.me.gamesPlayed}G</span>
+    </div>`;
+  }
+  section.innerHTML = `<div class="lb-card"><div class="lb-header">🏆 Leaderboard</div>${rows}</div>`;
+}
+
+// --- Auth ---
+
+async function loadTelegramWidget() {
+  const container = document.getElementById('telegram-widget-container');
+  if (container.hasChildNodes()) return; // already loaded
+  try {
+    const res = await fetch('/api/config');
+    const { botUsername } = await res.json();
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = 'https://telegram.org/js/telegram-widget.js?22';
+    script.setAttribute('data-telegram-login', botUsername);
+    script.setAttribute('data-size', 'large');
+    script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+    script.setAttribute('data-request-access', 'write');
+    container.appendChild(script);
+  } catch {
+    // If config fails, just show guest option
+  }
+}
+
+window.onTelegramAuth = async function (user) {
+  try {
+    const res = await fetch('/api/auth/telegram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user),
+    });
+    if (!res.ok) throw new Error('Auth failed');
+    const { token, displayName } = await res.json();
+    authToken = token;
+    authDisplayName = displayName;
+    localStorage.setItem('authToken', token);
+    showGameSection(displayName);
+    loadLeaderboard();
+  } catch {
+    alert('Telegram login failed. Please try again.');
+  }
+};
+
+async function initAuth() {
+  if (authToken) {
+    try {
+      const res = await fetch('/api/me', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const { displayName } = await res.json();
+        authDisplayName = displayName;
+        showGameSection(displayName);
+        return;
+      }
+    } catch { /* fall through to guest */ }
+    // Token invalid/expired — clear it
+    authToken = null;
+    authDisplayName = null;
+    localStorage.removeItem('authToken');
+  }
+  // Not logged in — show login section
+  showLoginSection();
+}
+
+function showLoginSection() {
+  document.getElementById('login-section').classList.remove('hidden');
+  document.getElementById('game-section').classList.add('hidden');
+  loadTelegramWidget();
+}
+
+function showGameSection(name) {
+  document.getElementById('login-section').classList.add('hidden');
+  document.getElementById('game-section').classList.remove('hidden');
+  const nameInput = document.getElementById('input-name');
+  if (name) nameInput.value = name; // prefer auth name over localStorage
+  const authStatus = document.getElementById('auth-status');
+  if (authDisplayName) {
+    authStatus.innerHTML = `Logged in as <strong>${esc(authDisplayName)}</strong> · <a href="#" id="btn-logout">Logout</a>`;
+    document.getElementById('btn-logout').addEventListener('click', (e) => {
+      e.preventDefault();
+      authToken = null;
+      authDisplayName = null;
+      localStorage.removeItem('authToken');
+      showLoginSection();
+      loadLeaderboard();
+    });
+  } else {
+    authStatus.textContent = 'Playing as guest';
+  }
+}
 
 // --- Screen management ---
 function showScreen(id) {
@@ -122,7 +252,8 @@ function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/api/ws?room=${roomCode}&playerId=${playerId}`);
+  const tokenParam = authToken ? `&token=${encodeURIComponent(authToken)}` : '';
+  ws = new WebSocket(`${proto}//${location.host}/api/ws?room=${roomCode}&playerId=${playerId}${tokenParam}`);
 
   ws.onopen = () => {
     reconnectDelay = 2000;
@@ -355,8 +486,18 @@ function renderState() {
       renderPlay(s);
       break;
     case 'gameover':
-      showScreen('screen-gameover');
-      renderGameOver(s);
+      if (document.getElementById('screen-play').classList.contains('active')) {
+        // Coming from play — keep the last trick visible for 2.5s before summary
+        renderPlay(s);
+        setTimeout(() => {
+          showScreen('screen-gameover');
+          renderGameOver(s);
+        }, 2500);
+      } else {
+        // Reconnecting directly to gameover — show immediately
+        showScreen('screen-gameover');
+        renderGameOver(s);
+      }
       break;
   }
 }
@@ -619,10 +760,32 @@ function getShareUrl() {
 // --- Event listeners ---
 $('input-name').value = playerName;
 
+// Show login section initially; initAuth will switch to game-section if already authed
+document.getElementById('login-section').classList.remove('hidden');
+document.getElementById('game-section').classList.add('hidden');
+
+document.getElementById('btn-guest').addEventListener('click', () => {
+  authToken = null;
+  authDisplayName = null;
+  showGameSection(null);
+});
+
+// Kick off auth check on page load
+initAuth();
+loadLeaderboard();
+
 $('btn-create').addEventListener('click', async () => {
   playerName = $('input-name').value.trim();
   if (!playerName) { alert('Please enter your name'); return; }
   localStorage.setItem('playerName', playerName);
+  if (authToken && authDisplayName && playerName !== authDisplayName) {
+    fetch('/api/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ displayName: playerName }),
+    }).catch(() => {});
+    authDisplayName = playerName;
+  }
 
   $('btn-create').disabled = true;
   try {
@@ -643,6 +806,14 @@ $('btn-join').addEventListener('click', () => {
   playerName = $('input-name').value.trim();
   if (!playerName) { alert('Please enter your name'); return; }
   localStorage.setItem('playerName', playerName);
+  if (authToken && authDisplayName && playerName !== authDisplayName) {
+    fetch('/api/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ displayName: playerName }),
+    }).catch(() => {});
+    authDisplayName = playerName;
+  }
 
   const code = $('input-room').value.trim().toUpperCase();
   if (!code || code.length < 3) { alert('Please enter a valid room code'); return; }
