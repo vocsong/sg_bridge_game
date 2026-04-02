@@ -447,8 +447,18 @@ function renderState() {
       renderPlay(s);
       break;
     case 'gameover':
-      showScreen('screen-gameover');
-      renderGameOver(s);
+      if (document.getElementById('screen-play').classList.contains('active')) {
+        // Coming from play — keep the last trick visible for 2.5s before summary
+        renderPlay(s);
+        setTimeout(() => {
+          showScreen('screen-gameover');
+          renderGameOver(s);
+        }, 2500);
+      } else {
+        // Reconnecting directly to gameover — show immediately
+        showScreen('screen-gameover');
+        renderGameOver(s);
+      }
       break;
   }
 }
