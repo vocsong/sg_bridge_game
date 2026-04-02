@@ -47,6 +47,8 @@ const screens = document.querySelectorAll('.screen');
 // --- Auth ---
 
 async function loadTelegramWidget() {
+  const container = document.getElementById('telegram-widget-container');
+  if (container.hasChildNodes()) return; // already loaded
   try {
     const res = await fetch('/api/config');
     const { botUsername } = await res.json();
@@ -57,7 +59,7 @@ async function loadTelegramWidget() {
     script.setAttribute('data-size', 'large');
     script.setAttribute('data-onauth', 'onTelegramAuth(user)');
     script.setAttribute('data-request-access', 'write');
-    document.getElementById('telegram-widget-container').appendChild(script);
+    container.appendChild(script);
   } catch {
     // If config fails, just show guest option
   }
