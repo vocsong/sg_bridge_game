@@ -4,6 +4,7 @@ import { NUM_PLAYERS, MAX_BID, CARD_SUITS } from './types';
 import { generateHands, getBidFromNum, getNumFromBid, getValidSuits, compareCards } from './bridge';
 import type { ClientMessage, ServerMessage } from './protocol';
 import { recordGameResult, getWinnerSeats } from './stats';
+import { getUser } from './db';
 
 interface SessionInfo {
   playerId: string;
@@ -216,6 +217,8 @@ export class GameRoom extends DurableObject {
         name: p.name,
         seat: p.seat,
         connected: p.connected,
+        wins: p.wins,
+        gamesPlayed: p.gamesPlayed,
       })),
       hand: mySeat >= 0 && state.hands.length > 0 ? state.hands[mySeat] : null,
       turn: state.turn,
@@ -337,7 +340,17 @@ export class GameRoom extends DurableObject {
     }
 
     const seat = state.players.length;
-    state.players.push({ id: playerId, name, seat, connected: true });
+    let wins: number | undefined;
+    let gamesPlayed: number | undefined;
+    if (playerId.startsWith('tg_')) {
+      const telegramId = Number(playerId.slice(3));
+      const userRow = await getUser((this.env as Env).DB, telegramId).catch(() => null);
+      if (userRow && userRow.games_played > 0) {
+        wins = userRow.wins;
+        gamesPlayed = userRow.games_played;
+      }
+    }
+    state.players.push({ id: playerId, name, seat, connected: true, wins, gamesPlayed });
 
     this.broadcast({
       type: 'joined',

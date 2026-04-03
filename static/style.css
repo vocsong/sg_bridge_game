@@ -278,6 +278,13 @@ html, body {
 }
 .player-item { display: flex; align-items: center; gap: 0.5rem; }
 .player-item:hover { background: rgba(255,255,255,0.06); }
+.lobby-player-name { flex: 1; }
+.lobby-stats {
+  font-size: 0.75rem;
+  color: var(--gold);
+  font-weight: 600;
+  margin-left: auto;
+}
 .player-item .seat-num {
   color: var(--accent-light); font-weight: 700;
   min-width: 1.5rem; font-size: 0.85rem;

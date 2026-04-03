@@ -647,7 +647,10 @@ function renderLobby(s) {
   for (const p of s.players) {
     const item = document.createElement('div');
     item.className = 'player-item';
-    item.innerHTML = `<span class="seat-num">${p.seat + 1}</span>${statusDot(p.connected)}<span>${esc(p.name)}</span>`;
+    const statsHtml = p.gamesPlayed
+      ? `<span class="lobby-stats">${p.wins}W / ${p.gamesPlayed}G</span>`
+      : '';
+    item.innerHTML = `<span class="seat-num">${p.seat + 1}</span>${statusDot(p.connected)}<span class="lobby-player-name">${esc(p.name)}</span>${statsHtml}`;
     list.appendChild(item);
   }
   const remaining = NUM_PLAYERS - s.players.length;
