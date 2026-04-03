@@ -37,6 +37,14 @@ let gameState = null;
 let lastGameOver = null;
 let prevTurn = -1;
 
+// Stats state
+let statsData = { players: [], pairs: [] };
+let statsGroups = [];
+let statsTab = 'players';
+let statsMinGames = 3;
+let statsSort = { col: 'winPct', dir: 'desc' };
+let statsGroupId = null;
+
 // Auth state
 let authToken = localStorage.getItem('authToken') || null;
 let authDisplayName = null; // name from /api/me, null for guests
@@ -111,6 +119,194 @@ async function renderGroupLeaderboard(groupId) {
   } catch {
     el.innerHTML = '';
   }
+}
+
+async function showStats() {
+  showScreen('screen-stats');
+  statsTab = 'players';
+  statsSort = { col: 'winPct', dir: 'desc' };
+  $('stats-tab-players')?.classList.add('active');
+  $('stats-tab-pairs')?.classList.remove('active');
+  await loadStats();
+}
+
+async function loadStats() {
+  const groupParam = statsGroupId ? `?groupId=${encodeURIComponent(statsGroupId)}` : '';
+  try {
+    const [playersRes, pairsRes, groupsRes] = await Promise.all([
+      fetch(`/api/stats${groupParam}`),
+      fetch(`/api/stats/pairs${groupParam}`),
+      fetch('/api/groups'),
+    ]);
+    if (playersRes.ok) statsData.players = await playersRes.json();
+    if (pairsRes.ok) statsData.pairs = await pairsRes.json();
+    if (groupsRes.ok) {
+      statsGroups = await groupsRes.json();
+      renderStatsGroupDropdown();
+    }
+  } catch {
+    // network error — render with whatever we have
+  }
+  renderStatsTab();
+}
+
+function renderStatsGroupDropdown() {
+  const sel = $('stats-group-select');
+  if (!sel) return;
+  if (statsGroups.length === 0) {
+    sel.style.display = 'none';
+    return;
+  }
+  sel.style.display = '';
+  sel.innerHTML =
+    '<option value="">🌐 Global</option>' +
+    statsGroups.map((g) => `<option value="${esc(g.groupId)}">${esc(g.groupName)}</option>`).join('');
+  sel.value = statsGroupId ?? '';
+  sel.onchange = () => {
+    statsGroupId = sel.value || null;
+    loadStats();
+  };
+}
+
+function switchStatsTab(tab) {
+  statsTab = tab;
+  $('stats-tab-players')?.classList.toggle('active', tab === 'players');
+  $('stats-tab-pairs')?.classList.toggle('active', tab === 'pairs');
+  renderStatsTab();
+}
+
+function setMinGames(n) {
+  statsMinGames = n;
+  document.querySelectorAll('.min-games-btn').forEach((btn) => {
+    btn.classList.toggle('active', Number(btn.dataset.value) === n);
+  });
+  renderStatsTab();
+}
+
+function sortStats(col) {
+  if (statsSort.col === col) {
+    statsSort.dir = statsSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    statsSort.col = col;
+    statsSort.dir = 'desc';
+  }
+  renderStatsTab();
+}
+
+function renderStatsTab() {
+  if (statsTab === 'players') {
+    renderPlayersTab(statsData.players, statsMinGames, statsSort);
+  } else {
+    renderPairsTab(statsData.pairs, statsMinGames, statsSort);
+  }
+}
+
+function renderPlayersTab(rows, minGames, sort) {
+  const content = $('stats-content');
+  if (!content) return;
+
+  const filtered = rows.filter((r) => r.games >= minGames);
+
+  const sortFns = {
+    winPct:           (r) => r.winPct,
+    games:            (r) => r.games,
+    bidderWinPct:     (r) => r.bidder.winPct,
+    partnerWinPct:    (r) => r.partner.winPct,
+    oppositionWinPct: (r) => r.opposition.winPct,
+    name:             (r) => r.displayName.toLowerCase(),
+  };
+  const fn = sortFns[sort.col] ?? sortFns.winPct;
+  const sorted = [...filtered].sort((a, b) => {
+    const av = fn(a), bv = fn(b);
+    return sort.dir === 'desc' ? (bv > av ? 1 : bv < av ? -1 : 0) : (av > bv ? 1 : av < bv ? -1 : 0);
+  });
+
+  if (sorted.length === 0) {
+    content.innerHTML = `<p class="stats-empty">No players with ${minGames}+ games yet.</p>`;
+    return;
+  }
+
+  const medals = ['🥇', '🥈', '🥉'];
+  const winPctClass = (p) => p >= 60 ? 'win-pct-high' : p >= 50 ? 'win-pct-mid' : 'win-pct-low';
+  const fmtPct = (p, g) =>
+    g === 0 ? '<span class="stats-na">—</span>' : `<span class="${winPctClass(p)}">${p}%</span>`;
+
+  const arrow = (col) => {
+    if (sort.col !== col) return '<span class="sort-arrow">⇅</span>';
+    return `<span class="sort-arrow active">${sort.dir === 'desc' ? '▼' : '▲'}</span>`;
+  };
+  const th = (col, label, left) =>
+    `<th class="${left ? 'stats-th-left' : ''}${sort.col === col ? ' sorted' : ''}" onclick="sortStats('${col}')">${label} ${arrow(col)}</th>`;
+
+  const bodyRows = sorted.map((r, i) => {
+    const medal = i < 3 ? medals[i] : `${i + 1}.`;
+    return `<tr>
+      <td class="stats-td-name">${medal} ${esc(r.displayName)}</td>
+      <td class="stats-td-num">${r.games}</td>
+      <td class="stats-td-num">${fmtPct(r.winPct, r.games)}</td>
+      <td class="stats-td-num">${fmtPct(r.bidder.winPct, r.bidder.games)}</td>
+      <td class="stats-td-num">${fmtPct(r.partner.winPct, r.partner.games)}</td>
+      <td class="stats-td-num">${fmtPct(r.opposition.winPct, r.opposition.games)}</td>
+      <td class="stats-td-num">${r.favBidSuit ?? '<span class="stats-na">—</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  content.innerHTML = `<div class="stats-table-wrap"><table class="stats-table">
+    <thead><tr>
+      ${th('name', 'Player', true)}
+      ${th('games', 'G', false)}
+      ${th('winPct', 'Win%', false)}
+      ${th('bidderWinPct', 'Bid%', false)}
+      ${th('partnerWinPct', 'Ptnr%', false)}
+      ${th('oppositionWinPct', 'Def%', false)}
+      <th>Suit</th>
+    </tr></thead>
+    <tbody>${bodyRows}</tbody>
+  </table></div>`;
+}
+
+function renderPairsTab(rows, minGames, sort) {
+  const content = $('stats-content');
+  if (!content) return;
+
+  const filtered = rows.filter((r) => r.games >= minGames);
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort.col === 'games') return sort.dir === 'desc' ? b.games - a.games : a.games - b.games;
+    return sort.dir === 'desc' ? b.winPct - a.winPct : a.winPct - b.winPct;
+  });
+
+  if (sorted.length === 0) {
+    content.innerHTML = `<p class="stats-empty">No pairs with ${minGames}+ games together yet.</p>`;
+    return;
+  }
+
+  const medals = ['🥇', '🥈', '🥉'];
+  const winPctClass = (p) => p >= 60 ? 'win-pct-high' : p >= 50 ? 'win-pct-mid' : 'win-pct-low';
+
+  const arrow = (col) => {
+    if (sort.col !== col) return '<span class="sort-arrow">⇅</span>';
+    return `<span class="sort-arrow active">${sort.dir === 'desc' ? '▼' : '▲'}</span>`;
+  };
+  const th = (col, label, left) =>
+    `<th class="${left ? 'stats-th-left' : ''}${sort.col === col ? ' sorted' : ''}" onclick="sortStats('${col}')">${label} ${arrow(col)}</th>`;
+
+  const bodyRows = sorted.map((r, i) => {
+    const medal = i < 3 ? medals[i] : `${i + 1}.`;
+    return `<tr>
+      <td class="stats-td-name">${medal} ${esc(r.player1)} + ${esc(r.player2)}</td>
+      <td class="stats-td-num">${r.games}</td>
+      <td class="stats-td-num"><span class="${winPctClass(r.winPct)}">${r.winPct}%</span></td>
+    </tr>`;
+  }).join('');
+
+  content.innerHTML = `<div class="stats-table-wrap"><table class="stats-table">
+    <thead><tr>
+      ${th('name', 'Teammates', true)}
+      ${th('games', 'G', false)}
+      ${th('winPct', 'Win%', false)}
+    </tr></thead>
+    <tbody>${bodyRows}</tbody>
+  </table></div>`;
 }
 
 // --- Auth ---
