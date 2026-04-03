@@ -35,6 +35,7 @@ let reconnectTimer = null;
 let reconnectDelay = 2000;
 let gameState = null;
 let lastGameOver = null;
+let prevTurn = -1;
 
 // Auth state
 let authToken = localStorage.getItem('authToken') || null;
@@ -293,6 +294,97 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// --- Sounds ---
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playCardSound() {
+  try {
+    const ctx = getAudioCtx();
+    const bufSize = ctx.sampleRate * 0.08;
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 3);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 1200;
+    filter.Q.value = 0.8;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    src.start();
+  } catch {}
+}
+
+function playDingSound() {
+  try {
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.35, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.6);
+  } catch {}
+}
+
+function playWinSound() {
+  try {
+    const ctx = getAudioCtx();
+    // Ascending arpeggio: C5 E5 G5 C6
+    [523, 659, 784, 1047].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = ctx.currentTime + i * 0.12;
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.3, t + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.4);
+    });
+  } catch {}
+}
+
+function playLoseSound() {
+  try {
+    const ctx = getAudioCtx();
+    // Descending minor: A4 F4 D4 A3
+    [440, 349, 294, 220].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const t = ctx.currentTime + i * 0.18;
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.25, t + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.5);
+    });
+  } catch {}
+}
+
 // --- Message handler ---
 function handleMessage(msg) {
   switch (msg.type) {
@@ -322,6 +414,7 @@ function handleMessage(msg) {
     case 'playPhaseStart':
       break;
     case 'cardPlayed':
+      playCardSound();
       break;
     case 'trickWon':
       animateTrickWon(msg);
@@ -664,6 +757,8 @@ function renderPlay(s) {
 
   // Hand
   const isMyTurn = s.turn === s.mySeat;
+  if (isMyTurn && prevTurn !== s.mySeat) playDingSound();
+  prevTurn = s.turn;
   let validSuits = null;
   if (isMyTurn && s.hand) {
     validSuits = getValidSuitsClient(s.hand, s.trumpSuit, s.currentSuit, s.trumpBroken);
@@ -709,6 +804,10 @@ function renderGameOver(s) {
   if (lastGameOver) {
     const myName = s.mySeat >= 0 ? s.players[s.mySeat].name : '';
     const iWon = lastGameOver.winnerNames.includes(myName);
+    if (lastGameOver._soundPlayed !== true) {
+      lastGameOver._soundPlayed = true;
+      iWon ? playWinSound() : playLoseSound();
+    }
     title.textContent = iWon ? 'You Won!' : 'Game Over';
     const winnersStr = lastGameOver.winnerNames.join(' & ');
     detail.textContent = lastGameOver.bidderWon
