@@ -1,7 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Player } from './types';
-
-const BID_SUITS = ['♣', '♦', '♥', '♠', '🚫'] as const;
+import { BID_SUITS } from './types';
 
 export interface PlayerStatRow {
   telegramId: number;
@@ -53,6 +52,8 @@ export async function recordGameStats(
     seatToTgId[p.seat] = p.id.startsWith('tg_') ? Number(p.id.slice(3)) : null;
   }
 
+  const playedAt = Math.floor(Date.now() / 1000);
+
   const stmts = players
     .filter((p) => p.id.startsWith('tg_'))
     .map((player) => {
@@ -72,8 +73,11 @@ export async function recordGameStats(
         partnerTgId = seatToTgId[bidderSeat] ?? null;
       } else {
         role = 'opposition';
-        const oppPartnerSeat = oppTeam.find((s) => s !== seat) ?? null;
-        partnerTgId = oppPartnerSeat !== null ? (seatToTgId[oppPartnerSeat] ?? null) : null;
+        if (!isSoloBidder) {
+          const oppPartnerSeat = oppTeam.find((s) => s !== seat) ?? null;
+          partnerTgId = oppPartnerSeat !== null ? (seatToTgId[oppPartnerSeat] ?? null) : null;
+        }
+        // isSoloBidder: no natural pairs, leave partnerTgId as null
       }
 
       return db
@@ -83,7 +87,7 @@ export async function recordGameStats(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
-          gameId, groupId, Math.floor(Date.now() / 1000),
+          gameId, groupId, playedAt,
           telegramId, role, won, bidLevel, bidSuit, tricksWon, partnerTgId,
         );
     });
