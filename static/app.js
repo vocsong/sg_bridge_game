@@ -920,6 +920,7 @@ function renderGameOver(s) {
   const bidderName = s.bidder >= 0 ? s.players[s.bidder].name : '?';
   const bidStr = s.bid >= 0 ? getBidFromNum(s.bid) : '?';
 
+  const container = $('gameover-container');
   if (lastGameOver) {
     const myName = s.mySeat >= 0 ? s.players[s.mySeat].name : '';
     const iWon = lastGameOver.winnerNames.includes(myName);
@@ -927,12 +928,17 @@ function renderGameOver(s) {
       lastGameOver._soundPlayed = true;
       iWon ? playWinSound() : playLoseSound();
     }
+    if (container) {
+      container.classList.remove('outcome-win', 'outcome-loss');
+      container.classList.add(iWon ? 'outcome-win' : 'outcome-loss');
+    }
     title.textContent = iWon ? 'You Won!' : 'Game Over';
     const winnersStr = lastGameOver.winnerNames.join(' & ');
     detail.textContent = lastGameOver.bidderWon
       ? `${winnersStr} won the bid of ${bidStr} (needed ${s.setsNeeded} sets)`
       : `${winnersStr} defeated the bid of ${bidStr}`;
   } else {
+    if (container) container.classList.remove('outcome-win', 'outcome-loss');
     title.textContent = 'Game Over';
     detail.textContent = `Bid: ${bidderName} - ${bidStr} (needed ${s.setsNeeded} sets)`;
   }
