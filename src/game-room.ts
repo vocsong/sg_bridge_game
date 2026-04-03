@@ -6,6 +6,7 @@ import type { ClientMessage, ServerMessage } from './protocol';
 import { recordGameResult, getWinnerSeats } from './stats';
 import { getUser, recordGroupResult } from './db';
 import { sendMessage, isChatMember } from './telegram';
+import { recordGameStats } from './stats-db';
 
 interface SessionInfo {
   playerId: string;
@@ -730,6 +731,18 @@ export class GameRoom extends DurableObject {
           );
         }
 
+        await recordGameStats(
+          (this.env as Env).DB,
+          state.roomCode,
+          state.groupId,
+          state.players,
+          bidder,
+          partner,
+          state.bid,
+          state.sets,
+          getWinnerSeats(bidder, partner, true),
+        );
+
         await this.saveState(state);
         this.broadcastFullState(state);
         return;
@@ -766,6 +779,18 @@ export class GameRoom extends DurableObject {
             getWinnerSeats(bidder, partner, false),
           );
         }
+
+        await recordGameStats(
+          (this.env as Env).DB,
+          state.roomCode,
+          state.groupId,
+          state.players,
+          bidder,
+          partner,
+          state.bid,
+          state.sets,
+          getWinnerSeats(bidder, partner, false),
+        );
 
         await this.saveState(state);
         this.broadcastFullState(state);
