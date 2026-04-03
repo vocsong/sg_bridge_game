@@ -65,6 +65,35 @@ playerDisconnected | playerReconnected
 - Must follow suit; can't lead trump until trump has been broken
 - Win condition: bidder + partner win ≥ (bid level + 6) tricks
 
+## Bot AI (Intermediate)
+
+Bots live entirely server-side in `src/game-room.ts`. All bot methods are private on `GameRoom`.
+
+### Bidding (`getBotBid`)
+- Calculate HCP (A=4 K=3 Q=2 J=1) + distribution bonus (+1 per card beyond 4 in any suit)
+- < 12 pts → pass; 12–14 → level 1; 15–17 → level 2; 18+ → level 3 (hard cap)
+- Trump suit = longest suit in hand (tiebreak: highest HCP). Suits ≤ 3 cards → prefer no-trump
+- If preferred suit already bid, try next higher suits at same level up to no-trump; never overbid level
+
+### Partner card selection (`getBotPartnerCard`)
+- Picks the highest card the bidder doesn't hold (tries A♠ → K♠ → ... → 2♣)
+
+### Card play (`getBotCard`) — confidence model
+- **Before** partner card is played in a trick: confidence = 0.65
+- **After** partner card revealed (checked by scanning if `state.partnerCard` is still in any hand): confidence = 0.85
+- Each decision rolls `Math.random() < confidence`; failures fall back to basic logic (win if possible, else lowest)
+
+### Bidder team play (`getBotCardAsBidderTeam`, `getBotLeadCard` with `onBidderTeam=true`)
+- Following: if a teammate is currently winning → dump lowest (don't steal). If opposition winning → play lowest winning card, else dump lowest.
+- Leading: prefer suit the **partner bid** (bid history signal = they have more of it). Else lead longest non-trump suit.
+
+### Opposition play (`getBotCardAsOpposition`, `getBotLeadCard` with `onBidderTeam=false`)
+- Following: if an opposition teammate already winning → dump lowest. Else try to win; if can't, dump lowest **non-trump** (conserve trump to block bidder later).
+- Leading: never lead trump. Avoid suits the bidder or partner bid (they're strong there). Prefer neutral suits; fallback to any non-trump.
+
+### Bid history as suit signal
+`state.bidHistory` entries where `bidNum !== null` indicate the bidder/partner likely holds more of that suit.
+
 ## Legacy Code
 
 The root-level Python files (`bridge.py`, `handlers.py`, `main.py`, etc.) are an archived Telegram bot implementation. `bridge.py` was the original source of truth for game logic, which was ported to `bridge.ts`. The Python code is not actively deployed.

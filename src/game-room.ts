@@ -815,6 +815,13 @@ export class GameRoom extends DurableObject {
     return false;
   }
 
+  // --- Intermediate bot card play ---
+  // Confidence model: before partner card revealed = 0.65, after = 0.85.
+  // Each decision point rolls Math.random() against confidence; failures fall back to basic logic.
+  // Bidder team: don't steal partner's win, cover partner when losing.
+  // Opposition: don't waste trump on lost tricks, prioritise blocking the bidder, avoid leading trump.
+  // Leading: bidder team prefers suits partner bid (bid history signal); opposition avoids bidder's suits.
+
   private getBotCard(state: GameState, seat: number): string {
     const hand = state.hands[seat];
     const validSuits = getValidSuits(hand, state.trumpSuit, state.currentSuit, state.trumpBroken);
@@ -828,32 +835,151 @@ export class GameRoom extends DurableObject {
     }
     if (validCards.length === 0) return '';
 
-    // If trick is complete or no cards played yet, bot leads with its lowest card
     const trickInProgress = !state.trickComplete && state.playedCards.some((c) => c !== null);
+    const onBidderTeam = this.isOnBidderTeam(state, seat);
+    const confidence = this.isPartnerCardRevealed(state) ? 0.85 : 0.65;
+    const useTeamLogic = state.partner >= 0 && Math.random() < confidence;
+
     if (!trickInProgress) {
+      return useTeamLogic
+        ? this.getBotLeadCard(state, seat, validCards, onBidderTeam)
+        : this.lowestCard(validCards);
+    }
+
+    if (useTeamLogic) {
+      return onBidderTeam
+        ? this.getBotCardAsBidderTeam(state, validCards)
+        : this.getBotCardAsOpposition(state, seat, validCards);
+    }
+
+    // Basic fallback: win if possible, else lowest
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const winningCards = validCards.filter((card) => {
+      const test = [...orderedSoFar, card];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    return winningCards.length > 0 ? this.lowestCard(winningCards) : this.lowestCard(validCards);
+  }
+
+  private getBotCardAsBidderTeam(state: GameState, validCards: string[]): string {
+    const currentWinnerSeat = this.getCurrentTrickWinnerSeat(state);
+    if (currentWinnerSeat !== null && this.isOnBidderTeam(state, currentWinnerSeat)) {
+      // Teammate winning — dump lowest, don't steal
+      return this.lowestCard(validCards);
+    }
+    // Opposition winning — play lowest card that takes the trick; else dump lowest
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const winning = validCards.filter((card) => {
+      const test = [...orderedSoFar, card];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    return winning.length > 0 ? this.lowestCard(winning) : this.lowestCard(validCards);
+  }
+
+  private getBotCardAsOpposition(state: GameState, seat: number, validCards: string[]): string {
+    const currentWinnerSeat = this.getCurrentTrickWinnerSeat(state);
+    // If an opposition teammate is already winning, dump lowest (no need to spend cards)
+    if (currentWinnerSeat !== null && !this.isOnBidderTeam(state, currentWinnerSeat)) {
       return this.lowestCard(validCards);
     }
 
-    // Build ordered cards played so far (from firstPlayer)
-    const orderedSoFar: string[] = [];
+    // Bidder's team is winning — try to beat them (prioritise beating the bidder)
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const winning = validCards.filter((card) => {
+      const test = [...orderedSoFar, card];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    if (winning.length > 0) return this.lowestCard(winning);
+
+    // Can't win — dump lowest non-trump to conserve trump for later
+    const nonTrump = validCards.filter((c) => c.split(' ')[1] !== state.trumpSuit);
+    return this.lowestCard(nonTrump.length > 0 ? nonTrump : validCards);
+  }
+
+  private getBotLeadCard(
+    state: GameState,
+    seat: number,
+    validCards: string[],
+    onBidderTeam: boolean,
+  ): string {
+    // Build suit sets from bid history
+    const partnerBidSuits = new Set<string>();
+    const bidderBidSuits = new Set<string>();
+    for (const entry of state.bidHistory) {
+      if (entry.bidNum === null) continue;
+      const suit = getBidFromNum(entry.bidNum).split(' ')[1];
+      if (suit === '🚫') continue;
+      if (entry.seat === state.partner) partnerBidSuits.add(suit);
+      if (entry.seat === state.bidder) bidderBidSuits.add(suit);
+    }
+
+    if (onBidderTeam) {
+      // Prefer leading a suit the partner bid (they likely have more)
+      const partnerSuitCards = validCards.filter(
+        (c) => partnerBidSuits.has(c.split(' ')[1]) && c.split(' ')[1] !== state.trumpSuit,
+      );
+      if (partnerSuitCards.length > 0) return this.lowestCard(partnerSuitCards);
+      // Else lead longest non-trump suit
+      return this.leadLongestNonTrump(state, seat, validCards);
+    } else {
+      // Opposition: never lead trump; avoid suits the bidder bid (they're strong there)
+      const safe = validCards.filter(
+        (c) => c.split(' ')[1] !== state.trumpSuit && !bidderBidSuits.has(c.split(' ')[1]) && !partnerBidSuits.has(c.split(' ')[1]),
+      );
+      if (safe.length > 0) return this.lowestCard(safe);
+      // Fallback: at least avoid trump
+      const nonTrump = validCards.filter((c) => c.split(' ')[1] !== state.trumpSuit);
+      return this.lowestCard(nonTrump.length > 0 ? nonTrump : validCards);
+    }
+  }
+
+  private leadLongestNonTrump(state: GameState, seat: number, validCards: string[]): string {
+    const hand = state.hands[seat];
+    let bestSuit: import('./types').Suit | null = null;
+    let bestLen = 0;
+    for (const suit of CARD_SUITS) {
+      if (suit === state.trumpSuit) continue;
+      if (hand[suit].length > bestLen) { bestLen = hand[suit].length; bestSuit = suit; }
+    }
+    if (bestSuit) {
+      const cards = validCards.filter((c) => c.split(' ')[1] === bestSuit);
+      if (cards.length > 0) return this.lowestCard(cards);
+    }
+    return this.lowestCard(validCards);
+  }
+
+  private isOnBidderTeam(state: GameState, seat: number): boolean {
+    return seat === state.bidder || seat === state.partner;
+  }
+
+  private isPartnerCardRevealed(state: GameState): boolean {
+    if (!state.partnerCard || state.partner < 0) return false;
+    const [value, suit] = state.partnerCard.split(' ');
+    for (let s = 0; s < NUM_PLAYERS; s++) {
+      if (state.hands[s][suit as import('./types').Suit]?.includes(value)) return false;
+    }
+    return true; // no longer in any hand → has been played
+  }
+
+  private getOrderedCardsPlayed(state: GameState): string[] {
+    const result: string[] = [];
     for (let i = 0; i < NUM_PLAYERS; i++) {
       const idx = (state.firstPlayer + i) % NUM_PLAYERS;
-      if (state.playedCards[idx] !== null) {
-        orderedSoFar.push(state.playedCards[idx]!);
-      }
+      if (state.playedCards[idx] !== null) result.push(state.playedCards[idx]!);
     }
+    return result;
+  }
 
-    // Find cards that would win
-    const winningCards: string[] = [];
-    for (const card of validCards) {
-      const testCards = [...orderedSoFar, card];
-      const winnerOffset = compareCards(testCards, state.currentSuit!, state.trumpSuit);
-      if (winnerOffset === testCards.length - 1) {
-        winningCards.push(card);
-      }
+  private getCurrentTrickWinnerSeat(state: GameState): number | null {
+    if (!state.currentSuit) return null;
+    const ordered: string[] = [];
+    const seats: number[] = [];
+    for (let i = 0; i < NUM_PLAYERS; i++) {
+      const idx = (state.firstPlayer + i) % NUM_PLAYERS;
+      if (state.playedCards[idx] !== null) { ordered.push(state.playedCards[idx]!); seats.push(idx); }
     }
-
-    return winningCards.length > 0 ? this.lowestCard(winningCards) : this.lowestCard(validCards);
+    if (ordered.length === 0) return null;
+    return seats[compareCards(ordered, state.currentSuit, state.trumpSuit)];
   }
 
   private lowestCard(cards: string[]): string {
