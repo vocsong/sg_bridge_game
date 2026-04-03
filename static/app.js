@@ -421,6 +421,11 @@ function isRedSuit(suit) {
   return suit === '♥' || suit === '♦';
 }
 
+/** True when the card's suit is trump (not no-trump). */
+function isTrumpPlaySuit(cardSuit, trumpSuit) {
+  return !!(trumpSuit && trumpSuit !== '🚫' && cardSuit === trumpSuit);
+}
+
 function createCardEl(value, suit, opts = {}) {
   const div = document.createElement('div');
   div.className = `card ${isRedSuit(suit) ? 'red' : 'black'}`;
@@ -428,6 +433,7 @@ function createCardEl(value, suit, opts = {}) {
   if (opts.mini) {
     div.className = `card-mini ${isRedSuit(suit) ? 'red' : 'black'}`;
   }
+  if (opts.trumpFire) div.classList.add('card-trump-fire');
   div.innerHTML = `<span class="card-value">${value}</span><span class="card-suit">${suit}</span>`;
   if (opts.onClick && !opts.disabled) {
     div.addEventListener('click', () => opts.onClick(value, suit));
@@ -788,7 +794,8 @@ function showLastTrick() {
     if (seat === lt.winner) label.classList.add('winner');
 
     const parts = card.split(' ');
-    const cardEl = createCardEl(parts[0], parts[1], { mini: false });
+    const trumpFire = isTrumpPlaySuit(parts[1], gameState.trumpSuit);
+    const cardEl = createCardEl(parts[0], parts[1], { mini: false, trumpFire });
 
     wrapper.appendChild(label);
     wrapper.appendChild(cardEl);
@@ -1036,7 +1043,8 @@ function renderPlay(s) {
     wrapper.className = `trick-card trick-card-${trickPos}`;
     if (played) {
       const parts = played.split(' ');
-      wrapper.appendChild(createCardEl(parts[0], parts[1], { mini: true }));
+      const trumpFire = isTrumpPlaySuit(parts[1], s.trumpSuit);
+      wrapper.appendChild(createCardEl(parts[0], parts[1], { mini: true, trumpFire }));
     }
     trickArea.appendChild(wrapper);
   }
