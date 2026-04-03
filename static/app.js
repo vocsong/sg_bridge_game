@@ -777,7 +777,7 @@ function renderPlay(s) {
       let text = player.name;
       if (seat === s.bidder) text += ' ★';
       const sets = s.sets?.[seat] ?? 0;
-      label.innerHTML = `${statusDot(player.connected)}${esc(text)}<span class="seat-sets">${sets}</span>`;
+      label.innerHTML = `<span class="seat-name-row">${statusDot(player.connected)}<span class="seat-name">${esc(text)}</span></span><span class="seat-sets">${sets}</span>`;
       label.className = 'seat-label';
       if (seat === s.turn) label.classList.add('active-turn');
       if (!player.connected) label.classList.add('disconnected');
