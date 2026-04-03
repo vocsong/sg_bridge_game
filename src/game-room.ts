@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { GameState, PlayerGameView, Suit, Hand, Env, TrickRecord, BidHistoryEntry, Spectator } from './types';
-import { NUM_PLAYERS, MAX_BID, CARD_SUITS } from './types';
+import { NUM_PLAYERS, MAX_BID, CARD_SUITS, BID_SUITS } from './types';
 import { generateHands, getBidFromNum, getNumFromBid, getValidSuits, compareCards, getNumFromValue } from './bridge';
 import type { ClientMessage, ServerMessage } from './protocol';
 import { recordGameResult, getWinnerSeats } from './stats';
@@ -789,7 +789,12 @@ export class GameRoom extends DurableObject {
     if (state.phase === 'bidding') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
-      await this.handlePass(state, current.id);
+      const bidNum = this.getBotBid(state, state.turn);
+      if (bidNum !== null) {
+        await this.handleBid(state, current.id, bidNum);
+      } else {
+        await this.handlePass(state, current.id);
+      }
       return true;
     }
     if (state.phase === 'partner') {
@@ -859,13 +864,67 @@ export class GameRoom extends DurableObject {
     });
   }
 
+  private getBotHandPoints(hand: import('./types').Hand): number {
+    let points = 0;
+    for (const suit of CARD_SUITS) {
+      const values = hand[suit];
+      for (const value of values) {
+        if (value === 'A') points += 4;
+        else if (value === 'K') points += 3;
+        else if (value === 'Q') points += 2;
+        else if (value === 'J') points += 1;
+      }
+      if (values.length >= 5) points += values.length - 4;
+    }
+    return points;
+  }
+
+  private getBotBid(state: GameState, seat: number): number | null {
+    const hand = state.hands[seat];
+    const points = this.getBotHandPoints(hand);
+
+    // Determine desired bid level based on hand strength
+    let desiredLevel: number;
+    if (points < 12) return null;
+    else if (points < 15) desiredLevel = 1;
+    else if (points < 18) desiredLevel = 2;
+    else desiredLevel = 3;
+
+    // Find best trump suit: longest suit, tiebreak by HCP in that suit
+    let bestSuitIdx = 4; // default: no-trump (index 4 in BID_SUITS)
+    let bestLen = 0;
+    let bestHCP = 0;
+    for (let si = 0; si < CARD_SUITS.length; si++) {
+      const suit = CARD_SUITS[si];
+      const values = hand[suit];
+      const hcp = values.reduce((s, v) => s + (v === 'A' ? 4 : v === 'K' ? 3 : v === 'Q' ? 2 : v === 'J' ? 1 : 0), 0);
+      if (values.length > bestLen || (values.length === bestLen && hcp > bestHCP)) {
+        bestLen = values.length;
+        bestHCP = hcp;
+        bestSuitIdx = si; // CARD_SUITS and BID_SUITS share the same 0-3 suit indices
+      }
+    }
+    // Short suits (≤3 cards) don't make reliable trump — prefer no-trump
+    if (bestLen <= 3) bestSuitIdx = 4;
+
+    // Try preferred suit, then higher suits at same level, up to no-trump
+    for (let si = bestSuitIdx; si <= 4; si++) {
+      const bidNum = (desiredLevel - 1) * 5 + si;
+      if (bidNum > state.bid && bidNum <= MAX_BID) return bidNum;
+    }
+
+    // Nothing valid at desired level — pass rather than overbid
+    return null;
+  }
+
   private getBotPartnerCard(state: GameState, bidderSeat: number): string {
-    // Pick the highest card from another player's hand (strongest partner)
+    // Pick the highest card the bidder doesn't hold
+    // Suits tried highest-first: ♠ ♥ ♦ ♣
+    const VALUES = ['A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3', '2'];
     for (const suit of ['♠', '♥', '♦', '♣'] as import('./types').Suit[]) {
-      for (let s = 0; s < NUM_PLAYERS; s++) {
-        if (s === bidderSeat) continue;
-        const values = state.hands[s][suit];
-        if (values.length > 0) return `${values[0]} ${suit}`;
+      const held = new Set(state.hands[bidderSeat][suit]);
+      for (const value of VALUES) {
+        if (!held.has(value)) return `${value} ${suit}`;
       }
     }
     return 'A ♠';
