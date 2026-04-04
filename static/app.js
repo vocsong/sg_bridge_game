@@ -1087,8 +1087,14 @@ function renderPlay(s) {
       const partnerStar = (s.partnerSeat !== -1 && seat === s.partnerSeat)
         ? '<span class="partner-star">★</span>'
         : '';
+      const specs = s.spectators ?? [];
+      const eyeIcons = specs
+        .map((sp, i) => sp.watchingSeat === seat
+          ? `<span class="seat-spectator-eye" style="color:${SPECTATOR_COLORS[i % SPECTATOR_COLORS.length]}">👁</span>`
+          : '')
+        .join('');
       const sets = s.sets?.[seat] ?? 0;
-      label.innerHTML = `<span class="seat-name-row">${bidderStar}${partnerStar}${statusDot(player.connected)}<span class="seat-name">${esc(player.name)}</span></span><span class="seat-sets">${sets}</span>`;
+      label.innerHTML = `<span class="seat-name-row">${bidderStar}${partnerStar}${statusDot(player.connected)}<span class="seat-name">${esc(player.name)}</span>${eyeIcons}</span><span class="seat-sets">${sets}</span>`;
       label.className = 'seat-label';
       if (seat === s.turn) {
         label.classList.add('active-turn');
