@@ -36,6 +36,7 @@ let reconnectDelay = 2000;
 let gameState = null;
 let lastGameOver = null;
 let prevTurn = -1;
+let lobbyCountdownTimer = null;
 
 // Stats state
 let statsData = { players: [], pairs: [] };
@@ -927,9 +928,12 @@ function renderLobby(s) {
       startBtn.classList.add('hidden');
     }
     if (secsLeft > 0) {
-      setTimeout(() => { if (gameState && gameState.phase === 'lobby') renderLobby(gameState); }, 500);
+      clearTimeout(lobbyCountdownTimer);
+      lobbyCountdownTimer = setTimeout(() => { if (gameState && gameState.phase === 'lobby') renderLobby(gameState); }, 500);
     }
   } else {
+    clearTimeout(lobbyCountdownTimer);
+    lobbyCountdownTimer = null;
     countdownEl.classList.add('hidden');
     startBtn.classList.add('hidden');
     statusEl.classList.remove('hidden');
