@@ -441,6 +441,7 @@ function createCardEl(value, suit, opts = {}) {
     div.className = `card-mini ${isRedSuit(suit) ? 'red' : 'black'}`;
   }
   if (opts.trumpFire) div.classList.add('card-trump-fire');
+  if (opts.partnerGlow) div.classList.add('card-partner-glow');
   div.innerHTML = `<span class="card-value">${value}</span><span class="card-suit">${suit}</span>`;
   if (opts.onClick && !opts.disabled) {
     div.addEventListener('click', () => opts.onClick(value, suit));
@@ -1050,7 +1051,8 @@ function renderPlay(s) {
     if (played) {
       const parts = played.split(' ');
       const trumpFire = isTrumpPlaySuit(parts[1], s.trumpSuit);
-      wrapper.appendChild(createCardEl(parts[0], parts[1], { mini: true, trumpFire }));
+      const partnerGlow = !!(s.partnerCard && played === s.partnerCard);
+      wrapper.appendChild(createCardEl(parts[0], parts[1], { mini: true, trumpFire, partnerGlow }));
     }
     trickArea.appendChild(wrapper);
   }
