@@ -7,6 +7,7 @@ import type { EloPlayer } from './elo';
 export interface PlayerStatRow {
   telegramId: number;
   displayName: string;
+  elo: number;
   games: number;
   wins: number;
   winPct: number;
@@ -110,7 +111,7 @@ export async function getPlayerStats(db: D1Database, groupId?: string): Promise<
   const main = await db
     .prepare(
       `SELECT
-         u.telegram_id, u.display_name,
+         u.telegram_id, u.display_name, u.elo,
          COUNT(*) as games,
          SUM(gr.won) as wins,
          ROUND(100.0 * SUM(gr.won) / COUNT(*), 1) as win_pct,
@@ -128,7 +129,7 @@ export async function getPlayerStats(db: D1Database, groupId?: string): Promise<
     )
     .bind(...bindings)
     .all<{
-      telegram_id: number; display_name: string;
+      telegram_id: number; display_name: string; elo: number;
       games: number; wins: number; win_pct: number;
       bidder_games: number; bidder_wins: number;
       partner_games: number; partner_wins: number;
@@ -156,6 +157,7 @@ export async function getPlayerStats(db: D1Database, groupId?: string): Promise<
   return (main.results ?? []).map((r) => ({
     telegramId: r.telegram_id,
     displayName: r.display_name,
+    elo: r.elo,
     games: r.games,
     wins: r.wins,
     winPct: r.win_pct,
