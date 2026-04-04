@@ -1101,6 +1101,11 @@ function renderPlay(s) {
   }
   $('play-partner-info').textContent = s.partnerCard ? `Partner: ${s.partnerCard}` : '';
   $('play-trump-info').textContent = s.trumpSuit ? `Trump: ${s.trumpSuit}` : '';
+  const practiceBadge = $('play-practice-badge');
+  if (practiceBadge) {
+    if (s.isPractice) practiceBadge.classList.remove('hidden');
+    else practiceBadge.classList.add('hidden');
+  }
 
   // Seat mapping: rotate so mySeat is always at bottom
   const seatOrder = [
@@ -1275,6 +1280,38 @@ function renderGameoverHands(s) {
   }
 }
 
+async function renderGameoverEloSection(s) {
+  const el = $('gameover-group-lb');
+  if (!el) return;
+  el.innerHTML = '';
+
+  if (!s.isPractice && s.gameId) {
+    try {
+      const res = await fetch(`/api/elo-deltas?gameId=${encodeURIComponent(s.gameId)}`);
+      if (res.ok) {
+        const deltas = await res.json();
+        if (deltas.length > 0) {
+          const rows = deltas.map((d) => {
+            const sign = d.delta > 0 ? '+' : '';
+            const cls = d.delta > 0 ? 'positive' : d.delta < 0 ? 'negative' : 'zero';
+            return `<div class="elo-delta-row">
+              <span class="elo-name">${esc(d.name)}</span>
+              <span class="elo-change ${cls}">${sign}${d.delta} <span style="font-weight:400;font-size:0.8em;color:var(--text-dimmer)">${d.eloAfter}</span></span>
+            </div>`;
+          }).join('');
+          el.innerHTML = `<div class="elo-delta-section"><div class="section-label">Elo this game</div>${rows}</div>`;
+          return;
+        }
+      }
+    } catch { /* fall through */ }
+  }
+
+  // Fallback: group leaderboard (or nothing for practice)
+  if (!s.isPractice && s.groupId) {
+    renderGroupLeaderboard(s.groupId);
+  }
+}
+
 function renderGameOver(s) {
   renderPlayerStatusBar($('gameover-players'), s.players);
   renderSpectatorBar(s);
@@ -1299,13 +1336,13 @@ function renderGameOver(s) {
     }
     title.textContent = iWon ? 'You Won!' : 'Game Over';
     const winnersStr = lastGameOver.winnerNames.join(' & ');
-    detail.textContent = lastGameOver.bidderWon
-      ? `${winnersStr} won the bid of ${bidStr} (needed ${s.setsNeeded} sets)`
-      : `${winnersStr} defeated the bid of ${bidStr}`;
+    detail.innerHTML = lastGameOver.bidderWon
+      ? `${esc(winnersStr)} won the bid of ${esc(bidStr)}<br><span style="font-size:0.82em">(needed ${s.setsNeeded} sets)</span>`
+      : `${esc(winnersStr)} defeated the bid of ${esc(bidStr)}`;
   } else {
     if (container) container.classList.remove('outcome-win', 'outcome-loss');
     title.textContent = 'Game Over';
-    detail.textContent = `Bid: ${bidderName} - ${bidStr} (needed ${s.setsNeeded} sets)`;
+    detail.innerHTML = `Bid: ${esc(bidderName)} — ${esc(bidStr)}<br><span style="font-size:0.82em">(needed ${s.setsNeeded} sets)</span>`;
   }
 
   // Determine which players are on the bidder's team
@@ -1337,9 +1374,7 @@ function renderGameOver(s) {
 
   const groupLbEl = $('gameover-group-lb');
   if (groupLbEl) groupLbEl.innerHTML = '';
-  if (s.groupId) {
-    renderGroupLeaderboard(s.groupId);
-  }
+  renderGameoverEloSection(s);
 
   renderGameoverHands(s);
 

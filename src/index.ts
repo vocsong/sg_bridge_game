@@ -190,6 +190,27 @@ export default {
       return new Response(null, { status: 200 });
     }
 
+    if (url.pathname === '/api/elo-deltas' && request.method === 'GET') {
+      const gameId = url.searchParams.get('gameId');
+      if (!gameId) return Response.json([], { status: 200 });
+      const rows = await env.DB
+        .prepare(
+          `SELECT u.display_name, eh.delta, eh.elo_before, eh.elo_after
+           FROM elo_history eh
+           JOIN users u ON u.telegram_id = eh.telegram_id
+           WHERE eh.game_id = ?`,
+        )
+        .bind(gameId)
+        .all<{ display_name: string; delta: number; elo_before: number; elo_after: number }>();
+      const result = (rows.results ?? []).map((r) => ({
+        name: r.display_name,
+        delta: r.delta,
+        eloBefore: r.elo_before,
+        eloAfter: r.elo_after,
+      }));
+      return Response.json(result);
+    }
+
     if (url.pathname === '/api/stats' && request.method === 'GET') {
       const groupId = url.searchParams.get('groupId') ?? undefined;
       const data = await getPlayerStats(env.DB, groupId);

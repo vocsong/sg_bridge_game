@@ -111,6 +111,8 @@ export interface PlayerGameView {
   readySeats: number[];
   allInitialHands: Hand[] | null;
   allFinalHands: Hand[] | null;
+  gameId: string;
+  isPractice: boolean;
 }
 
 export interface Env {

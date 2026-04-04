@@ -316,6 +316,8 @@ export class GameRoom extends DurableObject {
       allFinalHands: state.phase === 'gameover' && state.initialHands.length > 0
         ? state.hands
         : null,
+      gameId: state.gameId,
+      isPractice: state.players.filter((p) => p.isBot).length >= 2,
     };
     return { type: 'state', state: view };
   }
@@ -752,7 +754,7 @@ export class GameRoom extends DurableObject {
         trickCards: [...state.lastTrick.cards],
       });
 
-      const isPracticeGame = state.players.filter((p) => !p.isBot).length < 2;
+      const isPracticeGame = state.players.filter((p) => p.isBot).length >= 2;
 
       if (bidderSets >= state.setsNeeded) {
         state.phase = 'gameover';
@@ -778,7 +780,7 @@ export class GameRoom extends DurableObject {
           sendMessage(
             (this.env as Env).TELEGRAM_BOT_TOKEN,
             state.groupId,
-            `🏆 ${winnerNames.join(' & ')} won!\nBid ${bidStr}, made ${bidderSets}/${state.setsNeeded} tricks`,
+            `🏆 ${winnerNames.join(' & ')} won!\nBid ${bidStr}, made ${bidderSets}/${state.setsNeeded} tricks${isPracticeGame ? '\n(practice — unrated)' : ''}`,
           ).catch(() => {});
           if (!isPracticeGame) await recordGroupResult(
             (this.env as Env).DB,
@@ -858,7 +860,7 @@ export class GameRoom extends DurableObject {
           sendMessage(
             (this.env as Env).TELEGRAM_BOT_TOKEN,
             state.groupId,
-            `🛡️ ${winnerNames.join(' & ')} defended!\n${state.players[bidder].name}'s ${bidStr} bid failed`,
+            `🛡️ ${winnerNames.join(' & ')} defended!\n${state.players[bidder].name}'s ${bidStr} bid failed${isPracticeGame ? '\n(practice — unrated)' : ''}`,
           ).catch(() => {});
           if (!isPracticeGame) await recordGroupResult(
             (this.env as Env).DB,
@@ -1326,10 +1328,11 @@ export class GameRoom extends DurableObject {
     this.broadcastFullState(state);
     if (state.groupId) {
       const names = state.players.map((p) => p.name).join(', ');
+      const isPracticeStart = state.players.filter((p) => p.isBot).length >= 2;
       sendMessage(
         (this.env as Env).TELEGRAM_BOT_TOKEN,
         state.groupId,
-        `🎮 Game started!\nPlayers: ${names}`,
+        `🎮 Game started!\nPlayers: ${names}${isPracticeStart ? '\n(practice — unrated)' : ''}`,
       ).catch(() => {});
     }
     this.ctx.waitUntil(this.scheduleBotAction());
