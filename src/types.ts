@@ -64,6 +64,7 @@ export interface GameState {
   groupId: string | null;
   gameStartAt: number | null;
   partnerRevealed: boolean;
+  gameId: string;
 }
 
 export interface PlayerGameView {

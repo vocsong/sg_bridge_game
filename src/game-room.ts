@@ -234,6 +234,7 @@ export class GameRoom extends DurableObject {
       groupId,
       gameStartAt: null,
       partnerRevealed: false,
+      gameId: crypto.randomUUID(),
     };
   }
 
@@ -752,7 +753,7 @@ export class GameRoom extends DurableObject {
 
         await recordGameStats(
           (this.env as Env).DB,
-          state.roomCode,
+          state.gameId,
           state.groupId,
           state.players,
           bidder,
@@ -764,7 +765,7 @@ export class GameRoom extends DurableObject {
 
         await recordEloUpdate(
           (this.env as Env).DB,
-          state.roomCode,
+          state.gameId,
           state.players,
           bidder,
           partner,
@@ -810,7 +811,7 @@ export class GameRoom extends DurableObject {
 
         await recordGameStats(
           (this.env as Env).DB,
-          state.roomCode,
+          state.gameId,
           state.groupId,
           state.players,
           bidder,
@@ -822,7 +823,7 @@ export class GameRoom extends DurableObject {
 
         await recordEloUpdate(
           (this.env as Env).DB,
-          state.roomCode,
+          state.gameId,
           state.players,
           bidder,
           partner,
@@ -878,6 +879,7 @@ export class GameRoom extends DurableObject {
     const nextFirstBidder = otherSeats[Math.floor(Math.random() * otherSeats.length)];
 
     state.phase = 'bidding';
+    state.gameId = crypto.randomUUID();
     state.hands = generateHands();
     state.turn = nextFirstBidder;
     state.firstBidder = nextFirstBidder;
@@ -1223,6 +1225,7 @@ export class GameRoom extends DurableObject {
   private async startGameFromLobby(state: GameState): Promise<void> {
     this.shufflePlayerSeats(state);
     state.gameStartAt = null;
+    state.gameId = crypto.randomUUID();
     state.phase = 'bidding';
     state.hands = generateHands();
     state.turn = state.firstBidder;
