@@ -178,7 +178,6 @@ export class GameRoom extends DurableObject {
 
     // Countdown alarm — auto-start game when 5 seconds elapse
     if (state.gameStartAt !== null && Date.now() >= state.gameStartAt - 100) {
-      state.gameStartAt = null;
       if (state.phase === 'lobby' && state.players.length === NUM_PLAYERS) {
         const anyConnected = state.players.some((p) => p.connected);
         if (anyConnected) {
@@ -187,6 +186,7 @@ export class GameRoom extends DurableObject {
         }
       }
       // Countdown fired but couldn't start — schedule cleanup
+      state.gameStartAt = null;
       await this.saveState(state);
       await this.ctx.storage.setAlarm(Date.now() + 5 * 60 * 1000);
       return;
@@ -1253,6 +1253,13 @@ export class GameRoom extends DurableObject {
     if (!lastPlayer?.isBot) return;
 
     state.players.pop();
+
+    // Cancel countdown if active (dropping below 4 players)
+    if (state.gameStartAt !== null) {
+      state.gameStartAt = null;
+      await this.ctx.storage.deleteAlarm();
+    }
+
     await this.saveState(state);
     this.broadcastFullState(state);
   }
