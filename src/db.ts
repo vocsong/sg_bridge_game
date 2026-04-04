@@ -55,12 +55,13 @@ export async function updateDisplayName(
 export interface LeaderboardEntry {
   rank: number;
   displayName: string;
+  elo: number;
   wins: number;
   gamesPlayed: number;
 }
 
 /**
- * Returns top 5 players by wins (min 1 game played) + optionally the caller's rank.
+ * Returns top 5 players by ELO (min 1 game played) + optionally the caller's rank.
  * If telegramId is provided and not in top 5, their rank is returned separately.
  */
 export async function getLeaderboard(
@@ -69,18 +70,19 @@ export async function getLeaderboard(
 ): Promise<{ top: LeaderboardEntry[]; me: (LeaderboardEntry & { telegramId: number }) | null }> {
   const topRows = await db
     .prepare(
-      `SELECT display_name, wins, games_played,
-              RANK() OVER (ORDER BY wins DESC) AS rank
+      `SELECT display_name, elo, wins, games_played,
+              RANK() OVER (ORDER BY elo DESC) AS rank
        FROM users
        WHERE games_played > 0
-       ORDER BY wins DESC
+       ORDER BY elo DESC
        LIMIT 5`,
     )
-    .all<{ display_name: string; wins: number; games_played: number; rank: number }>();
+    .all<{ display_name: string; elo: number; wins: number; games_played: number; rank: number }>();
 
   const top: LeaderboardEntry[] = (topRows.results ?? []).map((r) => ({
     rank: r.rank,
     displayName: r.display_name,
+    elo: r.elo,
     wins: r.wins,
     gamesPlayed: r.games_played,
   }));
@@ -90,17 +92,16 @@ export async function getLeaderboard(
   // Get caller's stats
   const meRow = await db
     .prepare(
-      `SELECT display_name, wins, games_played,
-              (SELECT COUNT(*) + 1 FROM users WHERE wins > u.wins) AS rank
+      `SELECT display_name, elo, wins, games_played,
+              (SELECT COUNT(*) + 1 FROM users WHERE games_played > 0 AND elo > u.elo) AS rank
        FROM users u
        WHERE telegram_id = ?`,
     )
     .bind(telegramId)
-    .first<{ display_name: string; wins: number; games_played: number; rank: number }>();
+    .first<{ display_name: string; elo: number; wins: number; games_played: number; rank: number }>();
 
   if (!meRow || meRow.games_played === 0) return { top, me: null };
 
-  // Suppress me row if already in top 5 (rank <= 5)
   if (meRow.rank <= 5) return { top, me: null };
 
   return {
@@ -108,6 +109,7 @@ export async function getLeaderboard(
     me: {
       rank: meRow.rank,
       displayName: meRow.display_name,
+      elo: meRow.elo,
       wins: meRow.wins,
       gamesPlayed: meRow.games_played,
       telegramId,
@@ -164,12 +166,13 @@ export async function recordGroupResult(
 export interface GroupLeaderboardEntry {
   rank: number;
   displayName: string;
+  elo: number;
   wins: number;
   gamesPlayed: number;
 }
 
 /**
- * Returns top 5 players by wins in this group + optionally the caller's rank.
+ * Returns top 5 players by ELO in this group + optionally the caller's rank.
  */
 export async function getGroupLeaderboard(
   db: D1Database,
@@ -178,20 +181,21 @@ export async function getGroupLeaderboard(
 ): Promise<{ top: GroupLeaderboardEntry[]; me: (GroupLeaderboardEntry & { telegramId: number }) | null }> {
   const topRows = await db
     .prepare(
-      `SELECT u.display_name, gs.wins, gs.games_played,
-              RANK() OVER (ORDER BY gs.wins DESC) AS rank
+      `SELECT u.display_name, u.elo, gs.wins, gs.games_played,
+              RANK() OVER (ORDER BY u.elo DESC) AS rank
        FROM group_stats gs
        JOIN users u ON u.telegram_id = gs.telegram_id
        WHERE gs.group_id = ? AND gs.games_played > 0
-       ORDER BY gs.wins DESC
+       ORDER BY u.elo DESC
        LIMIT 5`,
     )
     .bind(groupId)
-    .all<{ display_name: string; wins: number; games_played: number; rank: number }>();
+    .all<{ display_name: string; elo: number; wins: number; games_played: number; rank: number }>();
 
   const top: GroupLeaderboardEntry[] = (topRows.results ?? []).map((r) => ({
     rank: r.rank,
     displayName: r.display_name,
+    elo: r.elo,
     wins: r.wins,
     gamesPlayed: r.games_played,
   }));
@@ -200,14 +204,17 @@ export async function getGroupLeaderboard(
 
   const meRow = await db
     .prepare(
-      `SELECT u.display_name, gs.wins, gs.games_played,
-              (SELECT COUNT(*) + 1 FROM group_stats WHERE group_id = ? AND wins > gs.wins) AS rank
+      `SELECT u.display_name, u.elo, gs.wins, gs.games_played,
+              (SELECT COUNT(*) + 1
+               FROM group_stats gs2
+               JOIN users u2 ON u2.telegram_id = gs2.telegram_id
+               WHERE gs2.group_id = ? AND gs2.games_played > 0 AND u2.elo > u.elo) AS rank
        FROM group_stats gs
        JOIN users u ON u.telegram_id = gs.telegram_id
        WHERE gs.group_id = ? AND gs.telegram_id = ?`,
     )
     .bind(groupId, groupId, telegramId)
-    .first<{ display_name: string; wins: number; games_played: number; rank: number }>();
+    .first<{ display_name: string; elo: number; wins: number; games_played: number; rank: number }>();
 
   if (!meRow || meRow.games_played === 0) return { top, me: null };
   if (meRow.rank <= 5) return { top, me: null };
@@ -217,6 +224,7 @@ export async function getGroupLeaderboard(
     me: {
       rank: meRow.rank,
       displayName: meRow.display_name,
+      elo: meRow.elo,
       wins: meRow.wins,
       gamesPlayed: meRow.games_played,
       telegramId,

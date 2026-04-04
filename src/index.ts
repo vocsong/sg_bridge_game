@@ -154,7 +154,7 @@ export default {
         } else {
           const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
           const rows = data.top
-            .map((e) => `${medals[e.rank - 1] ?? `${e.rank}.`} ${e.displayName} — ${e.wins}W / ${e.gamesPlayed}G`)
+            .map((e) => `${medals[e.rank - 1] ?? `${e.rank}.`} ${e.displayName} — ELO ${e.elo} (${e.wins}W / ${e.gamesPlayed}G)`)
             .join('\n');
           await sendMessage(
             env.TELEGRAM_BOT_TOKEN,

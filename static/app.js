@@ -76,6 +76,7 @@ function renderLeaderboard(data) {
     `<div class="lb-row">
       <span class="lb-rank">${medals[e.rank - 1] || '#' + e.rank}</span>
       <span class="lb-name">${esc(e.displayName)}</span>
+      <span class="lb-elo">${e.elo}</span>
       <span class="lb-stats">${e.wins}W / ${e.gamesPlayed}G</span>
     </div>`
   ).join('');
@@ -84,6 +85,7 @@ function renderLeaderboard(data) {
     <div class="lb-row lb-me">
       <span class="lb-rank">#${data.me.rank}</span>
       <span class="lb-name">You</span>
+      <span class="lb-elo">${data.me.elo}</span>
       <span class="lb-stats">${data.me.wins}W / ${data.me.gamesPlayed}G</span>
     </div>`;
   }
@@ -104,6 +106,7 @@ async function renderGroupLeaderboard(groupId) {
       `<div class="lb-row">
         <span class="lb-rank">${medals[e.rank - 1] || '#' + e.rank}</span>
         <span class="lb-name">${esc(e.displayName)}</span>
+        <span class="lb-elo">${e.elo}</span>
         <span class="lb-stats">${e.wins}W / ${e.gamesPlayed}G</span>
       </div>`
     ).join('');
@@ -112,6 +115,7 @@ async function renderGroupLeaderboard(groupId) {
       <div class="lb-row lb-me">
         <span class="lb-rank">#${data.me.rank}</span>
         <span class="lb-name">You</span>
+        <span class="lb-elo">${data.me.elo}</span>
         <span class="lb-stats">${data.me.wins}W / ${data.me.gamesPlayed}G</span>
       </div>`;
     }
@@ -124,7 +128,7 @@ async function renderGroupLeaderboard(groupId) {
 async function showStats() {
   showScreen('screen-stats');
   statsTab = 'players';
-  statsSort = { col: 'winPct', dir: 'desc' };
+  statsSort = { col: 'elo', dir: 'desc' };
   $('stats-tab-players')?.classList.add('active');
   $('stats-tab-pairs')?.classList.remove('active');
   await loadStats();
@@ -208,6 +212,7 @@ function renderPlayersTab(rows, minGames, sort) {
   const filtered = rows.filter((r) => r.games >= minGames);
 
   const sortFns = {
+    elo:              (r) => r.elo,
     winPct:           (r) => r.winPct,
     games:            (r) => r.games,
     bidderWinPct:     (r) => r.bidder.winPct,
@@ -242,6 +247,7 @@ function renderPlayersTab(rows, minGames, sort) {
     const medal = i < 3 ? medals[i] : `${i + 1}.`;
     return `<tr>
       <td class="stats-td-name">${medal} ${esc(r.displayName)}</td>
+      <td class="stats-td-num stats-elo">${r.elo}</td>
       <td class="stats-td-num">${r.games}</td>
       <td class="stats-td-num">${fmtPct(r.winPct, r.games)}</td>
       <td class="stats-td-num">${fmtPct(r.bidder.winPct, r.bidder.games)}</td>
@@ -254,6 +260,7 @@ function renderPlayersTab(rows, minGames, sort) {
   content.innerHTML = `<div class="stats-table-wrap"><table class="stats-table">
     <thead><tr>
       ${th('name', 'Player', true)}
+      ${th('elo', 'ELO', false)}
       ${th('games', 'G', false)}
       ${th('winPct', 'Win%', false)}
       ${th('bidderWinPct', 'Bid%', false)}
@@ -434,6 +441,7 @@ function createCardEl(value, suit, opts = {}) {
     div.className = `card-mini ${isRedSuit(suit) ? 'red' : 'black'}`;
   }
   if (opts.trumpFire) div.classList.add('card-trump-fire');
+  if (opts.partnerGlow) div.classList.add('card-partner-glow');
   div.innerHTML = `<span class="card-value">${value}</span><span class="card-suit">${suit}</span>`;
   if (opts.onClick && !opts.disabled) {
     div.addEventListener('click', () => opts.onClick(value, suit));
@@ -1044,7 +1052,8 @@ function renderPlay(s) {
     if (played) {
       const parts = played.split(' ');
       const trumpFire = isTrumpPlaySuit(parts[1], s.trumpSuit);
-      wrapper.appendChild(createCardEl(parts[0], parts[1], { mini: true, trumpFire }));
+      const partnerGlow = !!(s.partnerCard && played === s.partnerCard);
+      wrapper.appendChild(createCardEl(parts[0], parts[1], { mini: true, trumpFire, partnerGlow }));
     }
     trickArea.appendChild(wrapper);
   }
