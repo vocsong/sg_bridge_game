@@ -869,65 +869,29 @@ export class GameRoom extends DurableObject {
 
   private async handlePlayAgain(
     state: GameState,
-    _playerId: string,
+    playerId: string,
   ): Promise<void> {
     if (state.phase !== 'gameover') return;
 
-    // Capture who was first bidder before seats are reshuffled
-    const prevFirstBidderPlayer = state.players.find((p) => p.seat === state.firstBidder);
+    const player = state.players.find((p) => p.id === playerId);
+    if (!player) return; // spectator or unknown — ignore
 
-    this.shufflePlayerSeats(state);
+    if (state.readySeats.includes(player.seat)) return; // already ready
 
-    // Find their new seat after shuffle (so the same player doesn't go first twice)
-    const prevFirstBidderNewSeat = prevFirstBidderPlayer
-      ? (state.players.find((p) => p.id === prevFirstBidderPlayer.id)?.seat ?? -1)
-      : -1;
+    state.readySeats = [...state.readySeats, player.seat];
 
-    const otherSeats = [0, 1, 2, 3].filter((s) => s !== prevFirstBidderNewSeat);
-    const nextFirstBidder = otherSeats[Math.floor(Math.random() * otherSeats.length)];
-
-    state.phase = 'bidding';
-    state.gameId = crypto.randomUUID();
-    state.hands = generateHands();
-    state.turn = nextFirstBidder;
-    state.firstBidder = nextFirstBidder;
-    state.bidder = -1;
-    state.bid = -1;
-    state.trumpSuit = null;
-    state.setsNeeded = -1;
-    state.sets = [0, 0, 0, 0];
-    state.trumpBroken = false;
-    state.firstPlayer = 0;
-    state.currentSuit = null;
-    state.playedCards = [null, null, null, null];
-    state.partner = -1;
-    state.partnerCard = null;
-    state.partnerRevealed = false;
-    state.passCount = 0;
-    state.lastTrick = null;
-    state.trickComplete = false;
-    state.bidHistory = [];
-
-    // Re-check group membership for the new round
-    if (state.groupId) {
-      await Promise.all(
-        state.players.map(async (p) => {
-          if (p.id.startsWith('tg_')) {
-            p.isGroupMember = await isChatMember(
-              (this.env as Env).TELEGRAM_BOT_TOKEN,
-              state.groupId!,
-              Number(p.id.slice(3)),
-            );
-          } else {
-            p.isGroupMember = false;
-          }
-        }),
-      );
+    if (state.readySeats.length < NUM_PLAYERS) {
+      await this.saveState(state);
+      this.broadcastFullState(state);
+      return;
     }
 
+    // All players ready — transition to lobby with countdown
+    state.readySeats = [];
+    state.phase = 'lobby';
+    state.gameStartAt = Date.now() + 5000;
+    await this.ctx.storage.setAlarm(state.gameStartAt);
     await this.saveState(state);
-
-    this.broadcast({ type: 'gameStart', turn: nextFirstBidder });
     this.broadcastFullState(state);
   }
 
@@ -951,6 +915,14 @@ export class GameRoom extends DurableObject {
   }
 
   private async triggerBotAction(state: GameState): Promise<boolean> {
+    if (state.phase === 'gameover') {
+      const unreadyBot = state.players.find((p) => p.isBot && !state.readySeats.includes(p.seat));
+      if (unreadyBot) {
+        await this.handlePlayAgain(state, unreadyBot.id);
+        return true;
+      }
+      return false;
+    }
     if (state.phase === 'bidding') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
@@ -1231,7 +1203,20 @@ export class GameRoom extends DurableObject {
   }
 
   private async startGameFromLobby(state: GameState): Promise<void> {
+    // Capture who was first bidder before seats are reshuffled
+    const prevFirstBidderPlayer = state.players.find((p) => p.seat === state.firstBidder);
+
     this.shufflePlayerSeats(state);
+
+    // Find their new seat after shuffle (so the same player doesn't go first twice)
+    const prevFirstBidderNewSeat = prevFirstBidderPlayer
+      ? (state.players.find((p) => p.id === prevFirstBidderPlayer.id)?.seat ?? -1)
+      : -1;
+
+    const otherSeats = [0, 1, 2, 3].filter((s) => s !== prevFirstBidderNewSeat);
+    const nextFirstBidder = otherSeats[Math.floor(Math.random() * otherSeats.length)];
+    state.firstBidder = nextFirstBidder;
+
     state.gameStartAt = null;
     state.gameId = crypto.randomUUID();
     state.phase = 'bidding';
