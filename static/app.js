@@ -1057,6 +1057,16 @@ function renderBidding(s) {
 
   $('btn-pass').disabled = s.isSpectator || !isMyTurn;
   renderHand($('bidding-hand'), s.hand, null, null);
+
+  const hcpBadge = $('bidding-hcp');
+  if (hcpBadge && s.hand && !s.isSpectator) {
+    const hcp = CARD_SUITS.reduce((sum, suit) =>
+      sum + (s.hand[suit] || []).reduce((s2, v) =>
+        s2 + (v === 'A' ? 4 : v === 'K' ? 3 : v === 'Q' ? 2 : v === 'J' ? 1 : 0), 0), 0);
+    hcpBadge.textContent = `${hcp} pts`;
+  } else if (hcpBadge) {
+    hcpBadge.textContent = '';
+  }
 }
 
 // --- Partner selection ---

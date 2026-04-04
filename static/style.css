@@ -839,6 +839,18 @@ body.has-spectators .screen {
   letter-spacing: 0.08em;
   font-weight: 500;
 }
+.hcp-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent-light);
+  background: rgba(99, 179, 237, 0.12);
+  border: 1px solid rgba(99, 179, 237, 0.25);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+  text-transform: none;
+}
 
 /* --- Game Over --- */
 .gameover-container {
