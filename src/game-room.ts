@@ -1342,8 +1342,18 @@ export class GameRoom extends DurableObject {
     if (state.players.length >= NUM_PLAYERS) return;
 
     const botSeat = state.players.length;
-    const botNames = ['Bot Alpha', 'Bot Beta', 'Bot Gamma'];
-    const botName = botNames[botSeat - 1] ?? `Bot ${botSeat}`;
+    const BOT_NAME_POOL = [
+      'Ace', 'Bluff', 'Clover', 'Dealer', 'Echo',
+      'Finesse', 'Goblin', 'Hoyle', 'Ivory', 'Jinx',
+      'Knave', 'Lucky', 'Midas', 'Nova', 'Oracle',
+      'Pepper', 'Quill', 'Rogue', 'Spade', 'Thorn',
+    ];
+    const usedNames = new Set(state.players.map((p) => p.name));
+    const available = BOT_NAME_POOL.filter((n) => !usedNames.has(n));
+    const picked = available.length > 0
+      ? available[Math.floor(Math.random() * available.length)]
+      : `Bot ${botSeat}`;
+    const botName = picked;
     const bot: import('./types').Player = {
       id: `bot_${botSeat}`,
       name: botName,
