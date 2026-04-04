@@ -405,6 +405,18 @@ function showGameSection(name) {
   } else {
     authStatus.textContent = 'Playing as guest';
   }
+
+  // Show "Create game for <group>" button if the user was recently in a group lobby
+  const savedGroup = (() => { try { return JSON.parse(localStorage.getItem('lastGroup') || 'null'); } catch { return null; } })();
+  const groupBtn = $('btn-create-group');
+  if (groupBtn && savedGroup?.groupId && savedGroup?.groupName) {
+    groupBtn.textContent = `Create game for ${savedGroup.groupName}`;
+    groupBtn.classList.remove('hidden');
+    groupBtn.dataset.groupId = savedGroup.groupId;
+    groupBtn.dataset.groupName = savedGroup.groupName;
+  } else if (groupBtn) {
+    groupBtn.classList.add('hidden');
+  }
 }
 
 // --- Screen management ---
@@ -955,6 +967,18 @@ function renderLobby(s) {
       addBotBtn.classList.add('hidden');
     }
   }
+
+  const sendTgBtn = $('btn-send-tg');
+  if (sendTgBtn) {
+    if (s.groupId && s.groupName) {
+      sendTgBtn.textContent = `📨 Send to ${s.groupName}`;
+      sendTgBtn.classList.remove('hidden');
+      // Remember this group for the home screen "create for group" button
+      localStorage.setItem('lastGroup', JSON.stringify({ groupId: s.groupId, groupName: s.groupName }));
+    } else {
+      sendTgBtn.classList.add('hidden');
+    }
+  }
 }
 
 const SPECTATOR_COLORS = ['#06b6d4','#f97316','#a3e635','#f43f5e','#a855f7','#facc15'];
@@ -1430,6 +1454,41 @@ $('btn-create').addEventListener('click', async () => {
   }
 });
 
+$('btn-create-group').addEventListener('click', async () => {
+  playerName = $('input-name').value.trim();
+  if (!playerName) { alert('Please enter your name'); return; }
+  localStorage.setItem('playerName', playerName);
+  if (authToken && authDisplayName && playerName !== authDisplayName) {
+    fetch('/api/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ displayName: playerName }),
+    }).catch(() => {});
+    authDisplayName = playerName;
+  }
+
+  const btn = $('btn-create-group');
+  const groupId = btn.dataset.groupId;
+  const groupName = btn.dataset.groupName;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId, groupName, sendInvite: true, fromName: playerName }),
+    });
+    const data = await res.json();
+    setRoomCode(data.roomCode);
+    showScreen('screen-lobby');
+    $('lobby-room-code').textContent = roomCode;
+    connect();
+  } catch (err) {
+    alert('Failed to create game');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $('btn-join').addEventListener('click', () => {
   playerName = $('input-name').value.trim();
   if (!playerName) { alert('Please enter your name'); return; }
@@ -1461,6 +1520,24 @@ $('btn-share-link').addEventListener('click', () => {
       $('btn-share-link').textContent = 'Link Copied!';
       setTimeout(() => { $('btn-share-link').textContent = 'Share Invite Link'; }, 2000);
     });
+  }
+});
+
+$('btn-send-tg').addEventListener('click', async () => {
+  if (!roomCode) return;
+  const btn = $('btn-send-tg');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  try {
+    await fetch('/api/send-group-invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room: roomCode }),
+    });
+    btn.textContent = 'Sent!';
+    setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 2000);
+  } catch {
+    btn.disabled = false;
   }
 });
 

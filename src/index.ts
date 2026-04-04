@@ -85,16 +85,39 @@ export default {
     }
 
     if (url.pathname === '/api/create' && request.method === 'POST') {
-      const body = await request.json<{ groupId?: string | null }>().catch(() => ({} as { groupId?: string | null }));
+      const body = await request.json<{ groupId?: string | null; groupName?: string | null; sendInvite?: boolean; fromName?: string }>().catch(() => ({} as { groupId?: string | null; groupName?: string | null; sendInvite?: boolean; fromName?: string }));
       const roomCode = generateRoomCode();
       const stub = env.GAME_ROOM.getByName(roomCode);
       await stub.fetch(
         new Request('https://internal/create', {
           method: 'POST',
-          body: JSON.stringify({ roomCode, groupId: body.groupId ?? null }),
+          body: JSON.stringify({ roomCode, groupId: body.groupId ?? null, groupName: body.groupName ?? null }),
         }),
       );
+      if (body.sendInvite && body.groupId) {
+        const origin = new URL(request.url).origin;
+        const fromName = body.fromName ?? 'Someone';
+        sendMessage(
+          env.TELEGRAM_BOT_TOKEN,
+          body.groupId,
+          `🃏 <b>${fromName}</b> started a new game!\nJoin → ${origin}/#${roomCode}`,
+        ).catch(() => {});
+      }
       return Response.json({ roomCode });
+    }
+
+    if (url.pathname === '/api/send-group-invite' && request.method === 'POST') {
+      const body = await request.json<{ room: string }>().catch(() => null);
+      if (!body?.room) return new Response('Missing room', { status: 400 });
+      const stub = env.GAME_ROOM.getByName(body.room.toUpperCase());
+      const origin = new URL(request.url).origin;
+      await stub.fetch(
+        new Request('https://internal/send-group-invite', {
+          method: 'POST',
+          body: JSON.stringify({ origin }),
+        }),
+      );
+      return Response.json({ ok: true });
     }
 
     if (url.pathname === '/api/ws') {
@@ -133,7 +156,7 @@ export default {
         await stub.fetch(
           new Request('https://internal/create', {
             method: 'POST',
-            body: JSON.stringify({ roomCode, groupId: cmd.chatId }),
+            body: JSON.stringify({ roomCode, groupId: cmd.chatId, groupName: cmd.groupName }),
           }),
         );
         await sendMessage(

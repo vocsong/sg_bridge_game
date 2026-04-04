@@ -70,6 +70,7 @@ export interface GameState {
   spectators: Spectator[];
   firstBidder: number;
   groupId: string | null;
+  groupName: string | null;
   gameStartAt: number | null;
   partnerRevealed: boolean;
   gameId: string;
@@ -102,6 +103,7 @@ export interface PlayerGameView {
   isSpectator: boolean;
   watchingSeat: number;
   groupId: string | null;
+  groupName: string | null;
   gameStartAt: number | null;
   isGroupMember?: boolean;
   partnerSeat: number;
