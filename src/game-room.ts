@@ -316,6 +316,7 @@ export class GameRoom extends DurableObject {
       allFinalHands: state.phase === 'gameover' && state.initialHands.length > 0
         ? state.hands
         : null,
+      trickLog: state.phase === 'gameover' && state.trickLog.length > 0 ? state.trickLog : null,
       gameId: state.gameId,
       isPractice: state.players.filter((p) => p.isBot).length >= 2,
     };

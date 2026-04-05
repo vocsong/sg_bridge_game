@@ -111,6 +111,8 @@ export interface PlayerGameView {
   readySeats: number[];
   allInitialHands: Hand[] | null;
   allFinalHands: Hand[] | null;
+  /** Full trick history for recap UI (game over only). */
+  trickLog: TrickLogEntry[] | null;
   gameId: string;
   isPractice: boolean;
 }

@@ -1265,12 +1265,30 @@ function sendWatchSeat(seat) {
   }
 }
 
+function parseLoggedCard(cardStr) {
+  const i = cardStr.lastIndexOf(' ');
+  if (i <= 0) return null;
+  return { value: cardStr.slice(0, i), suit: cardStr.slice(i + 1) };
+}
+
 // --- Game Over ---
 function renderGameoverHands(s) {
   const container = $('gameover-hands');
   if (!container) return;
   container.innerHTML = '';
   if (!s.allInitialHands || !s.allFinalHands) return;
+
+  const log = s.trickLog;
+  const usePlayOrder =
+    log &&
+    log.length > 0 &&
+    log.length === s.allInitialHands.reduce((n, h) => {
+      if (!h) return n;
+      return (
+        n +
+        CARD_SUITS.reduce((m, suit) => m + (h[suit] ? h[suit].length : 0), 0)
+      );
+    }, 0);
 
   // Render one row per player in seat order (0–3)
   const sorted = [...s.players].sort((a, b) => a.seat - b.seat);
@@ -1290,14 +1308,27 @@ function renderGameoverHands(s) {
     const cards = document.createElement('div');
     cards.className = 'gameover-hand-cards';
 
-    for (const suit of CARD_SUITS) {
-      const initialValues = initial[suit] || [];
-      const finalSet = new Set(finalHand ? (finalHand[suit] || []) : []);
-      for (const value of initialValues) {
-        const played = !finalSet.has(value);
-        const el = createCardEl(value, suit, { mini: true });
-        if (played) el.classList.add('played');
+    if (usePlayOrder) {
+      const seatPlays = log
+        .filter((e) => e.seat === p.seat)
+        .sort((a, b) => a.trickNum - b.trickNum || a.playOrder - b.playOrder);
+      for (const e of seatPlays) {
+        const parsed = parseLoggedCard(e.card);
+        if (!parsed) continue;
+        const el = createCardEl(parsed.value, parsed.suit, { mini: true });
+        el.classList.add('played');
         cards.appendChild(el);
+      }
+    } else {
+      for (const suit of CARD_SUITS) {
+        const initialValues = initial[suit] || [];
+        const finalSet = new Set(finalHand ? (finalHand[suit] || []) : []);
+        for (const value of initialValues) {
+          const played = !finalSet.has(value);
+          const el = createCardEl(value, suit, { mini: true });
+          if (played) el.classList.add('played');
+          cards.appendChild(el);
+        }
       }
     }
 
