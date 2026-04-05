@@ -950,7 +950,7 @@ function renderLobby(s) {
   for (const p of s.players) {
     const item = document.createElement('div');
     item.className = 'player-item';
-    const botIcon = p.isBot ? `<span class="bot-icon">${p.botLevel === 'advanced' ? '🧠' : '🤖'}</span>` : '';
+    const botIcon = p.isBot ? `<span class="bot-icon">${p.botLevel === 'sophisticated' ? '🎓' : p.botLevel === 'advanced' ? '🧠' : '🤖'}</span>` : '';
     const eloStr = (!p.isBot && p.elo) ? `ELO ${p.elo} · ` : '';
     const statsHtml = (!p.isBot && p.gamesPlayed)
       ? `<span class="lobby-stats">${eloStr}${p.wins}W / ${p.gamesPlayed}G</span>`
@@ -997,14 +997,11 @@ function renderLobby(s) {
 
   const addIntBotBtn = $('lobby-add-int-bot');
   const addAdvBotBtn = $('lobby-add-adv-bot');
-  if (addIntBotBtn && addAdvBotBtn) {
-    if (isHost && remaining > 0) {
-      addIntBotBtn.classList.remove('hidden');
-      addAdvBotBtn.classList.remove('hidden');
-    } else {
-      addIntBotBtn.classList.add('hidden');
-      addAdvBotBtn.classList.add('hidden');
-    }
+  const addSophBotBtn = $('lobby-add-soph-bot');
+  for (const btn of [addIntBotBtn, addAdvBotBtn, addSophBotBtn]) {
+    if (!btn) continue;
+    if (isHost && remaining > 0) btn.classList.remove('hidden');
+    else btn.classList.add('hidden');
   }
 
   togglePractice('lobby-practice-notice', s.isPractice);

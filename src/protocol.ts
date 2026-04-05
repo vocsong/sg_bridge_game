@@ -8,7 +8,7 @@ export type ClientMessage =
   | { type: 'playCard'; card: string }
   | { type: 'playAgain' }
   | { type: 'watchSeat'; seat: number }
-  | { type: 'addBot'; level?: 'intermediate' | 'advanced' }
+  | { type: 'addBot'; level?: 'intermediate' | 'advanced' | 'sophisticated' }
   | { type: 'removeBot' }
   | { type: 'kickPlayer'; seat: number }
   | { type: 'startGame' };

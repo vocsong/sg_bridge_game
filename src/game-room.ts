@@ -1018,7 +1018,7 @@ export class GameRoom extends DurableObject {
     if (state.phase === 'bidding') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
-      const bidNum = current.botLevel === 'advanced'
+      const bidNum = (current.botLevel === 'advanced' || current.botLevel === 'sophisticated')
         ? this.getBotBidAdvanced(state, state.turn)
         : this.getBotBid(state, state.turn);
       if (bidNum !== null) {
@@ -1038,7 +1038,9 @@ export class GameRoom extends DurableObject {
     if (state.phase === 'play') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
-      const card = current.botLevel === 'advanced'
+      const card = current.botLevel === 'sophisticated'
+        ? this.getBotCardSophisticated(state, state.turn)
+        : current.botLevel === 'advanced'
         ? this.getBotCardAdvanced(state, state.turn)
         : this.getBotCard(state, state.turn);
       if (!card) return false;
@@ -1529,6 +1531,26 @@ export class GameRoom extends DurableObject {
     else if (S < 24) myMaxLevel = 2;
     else myMaxLevel = 3;
 
+    // Competitive suit adjustment: modify willingness to bid (myMaxLevel ± 1) based on how
+    // our hand relates to the current bid suit. Only applies when there is a bid to overcall.
+    //   Current bid == our best suit → opponent bid our strain; reduce aggression (-1 level)
+    //   Current bid is our weak suit → fight harder for a better contract (+1 level per tier)
+    if (state.bid >= 0) {
+      const currentBidSuitIdx = state.bid % 5;
+      if (currentBidSuitIdx < 4) { // NT bids have no suit to compare
+        const currentBidSuit = CARD_SUITS[currentBidSuitIdx];
+        const holding = hand[currentBidSuit].length;
+        if (currentBidSuitIdx === bestSuitIdx) {
+          myMaxLevel = Math.max(0, myMaxLevel - 1); // opponent bid our best strain — trap-pass
+        } else if (holding === 0) {
+          myMaxLevel = Math.min(3, myMaxLevel + 2); // void in their suit — fight very hard
+        } else if (holding <= 3) {
+          myMaxLevel = Math.min(3, myMaxLevel + 1); // short holding — willing to stretch one level
+        }
+        // 4+ cards and not our best suit → neutral (no adjustment)
+      }
+    }
+
     // Competitive step-up: find minimum level needed to overcall
     let proposedLevel: number;
     if (state.bid < 0) {
@@ -1828,6 +1850,431 @@ export class GameRoom extends DurableObject {
     return state.partnerCard.split(' ')[1] as Suit;
   }
 
+  // --- Sophisticated bot (builds on advanced, adds PPM-based probabilistic inference) ---
+  // Pre-reveal: uses Partner Probability Matrix to identify assumed teammate without using state.partner.
+  // Post-reveal: retains sophisticated behaviours (High-Low Peter, unblocking, coordination)
+  //              and delegates base logic to advanced methods.
+
+  /**
+   * Determine the bot's role without using state.partner (pre-reveal safe).
+   * Post-reveal falls back to state.partner for the partner seat.
+   */
+  private getBotSophisticatedRole(state: GameState, seat: number): 'bidder' | 'partner' | 'opposition' {
+    if (seat === state.bidder) return 'bidder';
+    if (this.isPartnerCardRevealed(state) && seat === state.partner) return 'partner';
+    if (!this.isPartnerCardRevealed(state) && state.partnerCard) {
+      const [val, suit] = state.partnerCard.split(' ');
+      if (state.hands[seat][suit as Suit]?.includes(val)) return 'partner';
+    }
+    return 'opposition';
+  }
+
+  /**
+   * Compute the Partner Probability Matrix for all other seats relative to `seat`.
+   * Scores are raw (not normalised). Higher = more likely to be the assumed teammate.
+   */
+  private computePPM(state: GameState, seat: number): Map<number, number> {
+    const others = [0, 1, 2, 3].filter((s) => s !== seat);
+    const ppm = new Map<number, number>();
+    const role = this.getBotSophisticatedRole(state, seat);
+
+    // Initial priors
+    for (const s of others) {
+      if (role === 'bidder') ppm.set(s, 33);                                    // equal prior
+      else if (role === 'partner') ppm.set(s, s === state.bidder ? 100 : 0);    // partner knows bidder
+      else ppm.set(s, s === state.bidder ? 0 : 50);                             // opp: 50/50 for non-bidders
+    }
+
+    const calledCard = state.partnerCard;
+    const calledSuit = this.getCalledSuit(state);
+    const bidderBidSuits = this.getBidderBidSuits(state);
+
+    // Bidding swing: non-bidder who bid → competed against bidder → -25 (unlikely partner)
+    for (const entry of state.bidHistory) {
+      if (!others.includes(entry.seat) || entry.seat === state.bidder) continue;
+      if (entry.bidNum !== null) {
+        ppm.set(entry.seat, Math.max(0, (ppm.get(entry.seat) ?? 0) - 25));
+      }
+    }
+
+    // Trick log swings
+    const trickMap = new Map<number, TrickLogEntry[]>();
+    for (const entry of state.trickLog) {
+      if (!trickMap.has(entry.trickNum)) trickMap.set(entry.trickNum, []);
+      trickMap.get(entry.trickNum)!.push(entry);
+    }
+
+    for (const [trickNum, entries] of trickMap) {
+      const lead = entries.find((e) => e.playOrder === 1);
+      const ledSuit = lead?.card.split(' ')[1];
+      const winner = state.trickWinners[trickNum - 1] ?? -1;
+      const bidderEntry = entries.find((e) => e.seat === state.bidder);
+      const bidderPlayedHonor = bidderEntry && ['A', 'K'].includes(bidderEntry.card.split(' ')[0]);
+
+      for (const entry of entries) {
+        if (!others.includes(entry.seat)) continue;
+        const [val, suit] = entry.card.split(' ');
+        let curr = ppm.get(entry.seat) ?? 0;
+
+        // Called card played → absolute reveal (+100, zero all others)
+        if (calledCard && entry.card === calledCard) {
+          ppm.set(entry.seat, 100);
+          for (const o of others) if (o !== entry.seat) ppm.set(o, 0);
+          continue;
+        }
+
+        // Opening lead signals
+        if (entry.playOrder === 1) {
+          if (bidderBidSuits.has(suit)) curr = Math.min(100, curr + 30);                              // leads bidder suit → partner signal
+          if (suit === calledSuit && ['K', 'Q', 'J'].includes(val)) curr = Math.max(0, curr - 25);   // interrogation lead → opp signal
+        }
+        // Second-hand-low (non-honor when playing 2nd) → cooperative → +10
+        if (entry.playOrder === 2 && !['A', 'K', 'Q', 'J'].includes(val)) curr = Math.min(100, curr + 10);
+        // High discard (off-suit honor) → strength signal to partner → +15
+        if (ledSuit && suit !== ledSuit && ['J', 'Q', 'K', 'A'].includes(val)) curr = Math.min(100, curr + 15);
+
+        // Savior / Friendly Fire based on trick winner
+        if (entry.seat === winner && winner !== state.bidder) {
+          if (bidderPlayedHonor) curr = Math.max(0, curr - 40); // beat bidder's honor → friendly fire
+          else curr = Math.min(100, curr + 25);                  // won when bidder didn't dominate → savior
+        }
+
+        ppm.set(entry.seat, curr);
+      }
+    }
+
+    // Current in-progress trick partial signals
+    for (const s of others) {
+      const card = state.playedCards[s];
+      if (!card) continue;
+      const [val, suit] = card.split(' ');
+      let curr = ppm.get(s) ?? 0;
+      if (calledCard && card === calledCard) {
+        ppm.set(s, 100);
+        for (const o of others) if (o !== s) ppm.set(o, 0);
+        continue;
+      }
+      if (state.currentSuit && suit !== state.currentSuit && ['J', 'Q', 'K', 'A'].includes(val)) {
+        curr = Math.min(100, curr + 15); // high discard in current trick
+      }
+      ppm.set(s, curr);
+    }
+
+    return ppm;
+  }
+
+  /** Argmax of PPM — the seat most likely to be the bot's teammate. Post-reveal returns actual partner. */
+  private getAssumedTeammate(state: GameState, seat: number, ppm: Map<number, number>): number {
+    if (this.isPartnerCardRevealed(state)) return state.partner;
+    let best = -1;
+    let bestScore = -Infinity;
+    for (const [s, score] of ppm) {
+      if (s !== seat && score > bestScore) { bestScore = score; best = s; }
+    }
+    return best;
+  }
+
+  /**
+   * Reveal Urgency Score (0–100) for the partner bot.
+   * High RUS → reveal the called card (come out of hiding).
+   */
+  private computeRUS(state: GameState, seat: number): number {
+    let rus = 0;
+    const calledSuit = this.getCalledSuit(state);
+    const hand = state.hands[seat];
+
+    // Bidder's current-trick card is in the called suit → bidder is probing
+    const bidderCurrentCard = state.playedCards[state.bidder];
+    if (bidderCurrentCard && calledSuit && bidderCurrentCard.split(' ')[1] === calledSuit) rus += 30;
+
+    // Bidder lost the last 2 tricks → needs help
+    const last2 = state.trickWinners.slice(-2);
+    if (last2.length >= 2 && last2.every((w) => w !== state.bidder)) rus += 20;
+
+    // Partner is void in led suit and can ruff → high-value reveal opportunity
+    if (state.currentSuit && state.trumpSuit && state.trumpSuit !== '🚫') {
+      const isVoid = (hand[state.currentSuit as Suit]?.length ?? 0) === 0;
+      const hasTrump = (hand[state.trumpSuit as Suit]?.length ?? 0) > 0;
+      if (isVoid && hasTrump) rus += 50;
+    }
+
+    return rus;
+  }
+
+  /**
+   * Detect High-Low Peter signals from the trick log.
+   * Returns a map of seat → set of suits in which that seat played high-then-low (peter signal).
+   */
+  private detectHighLowPeter(state: GameState): Map<number, Set<Suit>> {
+    const peters = new Map<number, Set<Suit>>();
+    for (let s = 0; s < NUM_PLAYERS; s++) peters.set(s, new Set());
+
+    // Chronological plays per seat per suit
+    const sorted = [...state.trickLog].sort((a, b) =>
+      a.trickNum !== b.trickNum ? a.trickNum - b.trickNum : a.playOrder - b.playOrder,
+    );
+    const seatSuitPlays = new Map<number, Map<string, string[]>>();
+    for (let s = 0; s < NUM_PLAYERS; s++) seatSuitPlays.set(s, new Map());
+    for (const entry of sorted) {
+      const [val, suit] = entry.card.split(' ');
+      const m = seatSuitPlays.get(entry.seat)!;
+      if (!m.has(suit)) m.set(suit, []);
+      m.get(suit)!.push(val);
+    }
+
+    for (const [s, suitMap] of seatSuitPlays) {
+      for (const [suit, vals] of suitMap) {
+        if (vals.length >= 2) {
+          const r1 = getNumFromValue(vals[0]);
+          const r2 = getNumFromValue(vals[1]);
+          // High (≥6) then low → peter signal
+          if (r1 > r2 && r1 >= getNumFromValue('6')) {
+            peters.get(s)!.add(suit as Suit);
+          }
+        }
+      }
+    }
+    return peters;
+  }
+
+  /**
+   * Try to send a High-Low Peter signal when leading.
+   * First play in a suit with 3+ cards: lead second-lowest (high) so next play can be lowest (low).
+   * Returns the chosen card or null if no suitable suit found.
+   */
+  private tryHighLowPeter(state: GameState, seat: number, validCards: string[]): string | null {
+    const hand = state.hands[seat];
+    const alreadyPlayedSuits = new Set(
+      state.trickLog.filter((e) => e.seat === seat).map((e) => e.card.split(' ')[1]),
+    );
+    for (const suit of CARD_SUITS) {
+      if (suit === state.trumpSuit) continue;
+      if (alreadyPlayedSuits.has(suit)) continue; // already played → too late to start a peter
+      if (hand[suit].length < 3) continue;
+      const suitCards = validCards.filter((c) => c.split(' ')[1] === suit);
+      if (suitCards.length < 2) continue;
+      const sorted = [...suitCards].sort(
+        (a, b) => getNumFromValue(a.split(' ')[0]) - getNumFromValue(b.split(' ')[0]),
+      );
+      return sorted[1]; // second-lowest = the "high" card of the peter
+    }
+    return null;
+  }
+
+  // --- Sophisticated entry point ---
+
+  private getBotCardSophisticated(state: GameState, seat: number): string {
+    const hand = state.hands[seat];
+    const validSuits = getValidSuits(hand, state.trumpSuit, state.currentSuit, state.trumpBroken);
+    if (validSuits.length === 0) return '';
+    const validCards: string[] = [];
+    for (const suit of validSuits) for (const value of hand[suit]) validCards.push(`${value} ${suit}`);
+    if (validCards.length === 0) return '';
+
+    const trickInProgress = !state.trickComplete && state.playedCards.some((c) => c !== null);
+    const confidence = this.isPartnerCardRevealed(state) ? 0.85 : 0.65;
+    const useTeamLogic = state.partner >= 0 && Math.random() < confidence;
+    const ppm = this.computePPM(state, seat);
+    const role = this.getBotSophisticatedRole(state, seat);
+
+    if (!trickInProgress) {
+      return useTeamLogic
+        ? this.getBotLeadCardSophisticated(state, seat, validCards, ppm, role)
+        : this.lowestCard(validCards);
+    }
+    if (useTeamLogic) {
+      return this.getBotFollowCardSophisticated(state, seat, validCards, ppm, role);
+    }
+    // Basic fallback
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const winning = validCards.filter((c) => {
+      const test = [...orderedSoFar, c];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    return winning.length > 0 ? this.lowestCard(winning) : this.smartDumpAdvanced(state, seat, validCards);
+  }
+
+  private getBotLeadCardSophisticated(
+    state: GameState,
+    seat: number,
+    validCards: string[],
+    ppm: Map<number, number>,
+    role: 'bidder' | 'partner' | 'opposition',
+  ): string {
+    const revealed = this.isPartnerCardRevealed(state);
+    const calledSuit = this.getCalledSuit(state);
+    const trickNum = state.trickWinners.length + 1; // 1-based current trick
+
+    if (role === 'bidder') {
+      // Probing (tricks 1–3, pre-reveal): lead low in called suit to flush partner, else low trump
+      if (!revealed && trickNum <= 3) {
+        if (calledSuit) {
+          const calledCards = validCards.filter((c) => c.split(' ')[1] === calledSuit);
+          if (calledCards.length > 0) return this.lowestCard(calledCards);
+        }
+        if (state.trumpSuit && state.trumpSuit !== '🚫') {
+          const trumpCards = validCards.filter((c) => c.split(' ')[1] === state.trumpSuit);
+          if (trumpCards.length > 0) return this.lowestCard(trumpCards);
+        }
+      }
+      // Commitment: feed lead to assumed/actual teammate if PPM > 45%
+      const target = this.getAssumedTeammate(state, seat, ppm);
+      const targetScore = revealed ? 100 : (ppm.get(target) ?? 0);
+      if (target >= 0 && targetScore > 45) {
+        const targetBidSuits = new Set<string>();
+        for (const entry of state.bidHistory) {
+          if (entry.seat === target && entry.bidNum !== null) {
+            const s = getBidFromNum(entry.bidNum).split(' ')[1];
+            if (s !== '🚫') targetBidSuits.add(s);
+          }
+        }
+        const feedCards = validCards.filter(
+          (c) => targetBidSuits.has(c.split(' ')[1]) && c.split(' ')[1] !== state.trumpSuit,
+        );
+        if (feedCards.length > 0) return this.lowestCard(feedCards); // low → gives teammate the lead
+      }
+      return this.getBotLeadCardAdvanced(state, seat, validCards, true);
+    }
+
+    if (role === 'partner') {
+      // High-Low Peter (both pre and post reveal): signal length to bidder
+      if (Math.random() < 0.3) {
+        const peter = this.tryHighLowPeter(state, seat, validCards);
+        if (peter) return peter;
+      }
+      // Pre-reveal stealth: if RUS < 70, avoid leading called suit (hide identity)
+      if (!revealed && calledSuit) {
+        if (this.computeRUS(state, seat) < 70) {
+          const nonCalled = validCards.filter((c) => c.split(' ')[1] !== calledSuit);
+          if (nonCalled.length > 0) return this.getBotLeadCardAdvanced(state, seat, nonCalled, true);
+        }
+      }
+      return this.getBotLeadCardAdvanced(state, seat, validCards, true);
+    }
+
+    // Opposition
+    // Mimicry (pre-reveal, 15%): fake partner signal to mislead bidder
+    if (!revealed && Math.random() < 0.15) {
+      const bidderBidSuits = this.getBidderBidSuits(state);
+      const fakeCards = validCards.filter(
+        (c) => bidderBidSuits.has(c.split(' ')[1]) && c.split(' ')[1] !== state.trumpSuit,
+      );
+      if (fakeCards.length > 0) return this.highestCard(fakeCards);
+    }
+    // Interrogation (pre-reveal): lead high in called suit to force partner to reveal
+    if (!revealed && calledSuit) {
+      const calledCards = validCards.filter((c) => c.split(' ')[1] === calledSuit);
+      if (calledCards.some((c) => ['K', 'Q', 'J'].includes(c.split(' ')[0]))) {
+        return this.highestCard(calledCards);
+      }
+    }
+    // Shortening bidder: lead suits where bidder is known void (forces trump expenditure)
+    const voids = this.getVoids(state);
+    const bidderVoids = voids.get(state.bidder) ?? new Set<Suit>();
+    const shorteningCards = validCards.filter(
+      (c) => (c.split(' ')[1] as Suit) !== state.trumpSuit && bidderVoids.has(c.split(' ')[1] as Suit),
+    );
+    if (shorteningCards.length > 0) return this.lowestCard(shorteningCards);
+    // Post-reveal: lead through strength (lead bidder's suit → forces them to play before partner)
+    if (revealed) {
+      const bidderBidSuits = this.getBidderBidSuits(state);
+      const throughStrength = validCards.filter(
+        (c) => bidderBidSuits.has(c.split(' ')[1]) && c.split(' ')[1] !== state.trumpSuit,
+      );
+      if (throughStrength.length > 0) return this.lowestCard(throughStrength);
+    }
+    return this.getBotLeadCardAdvanced(state, seat, validCards, false);
+  }
+
+  private getBotFollowCardSophisticated(
+    state: GameState,
+    seat: number,
+    validCards: string[],
+    ppm: Map<number, number>,
+    role: 'bidder' | 'partner' | 'opposition',
+  ): string {
+    const revealed = this.isPartnerCardRevealed(state);
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const currentWinnerSeat = this.getCurrentTrickWinnerSeat(state);
+    const afterUs = this.getPlayersAfter(state, seat);
+    const assumedTeammate = this.getAssumedTeammate(state, seat, ppm);
+
+    // Sophisticated partner behaviours apply both pre and post reveal
+    if (role === 'partner') {
+      // Unblocking: bidder leads K → partner plays Q to clear the suit
+      if (state.currentSuit && state.firstPlayer === state.bidder) {
+        const bidderCard = state.playedCards[state.bidder];
+        if (bidderCard?.split(' ')[0] === 'K' && bidderCard.split(' ')[1] === state.currentSuit) {
+          const queenCard = `Q ${state.currentSuit}`;
+          if (validCards.includes(queenCard)) return queenCard;
+        }
+      }
+      // Human Shield: random chance to sacrifice a mid-range card (6–J)
+      if (Math.random() < 0.25) {
+        const midRange = validCards.filter((c) => {
+          const r = getNumFromValue(c.split(' ')[0]);
+          return r >= getNumFromValue('6') && r <= getNumFromValue('J');
+        });
+        if (midRange.length > 0) return midRange[Math.floor(Math.random() * midRange.length)];
+      }
+    }
+
+    // Post-reveal: delegate to advanced (uses full team knowledge)
+    if (revealed) {
+      return this.isOnBidderTeam(state, seat)
+        ? this.getBotCardAsBidderTeamAdvanced(state, seat, validCards)
+        : this.getBotCardAsOppositionAdvanced(state, seat, validCards);
+    }
+
+    // Pre-reveal: PPM-based follow (no state.partner access)
+
+    // Partner: bidder winning → don't steal
+    if (role === 'partner' && currentWinnerSeat === state.bidder) {
+      return this.smartDumpAdvanced(state, seat, validCards);
+    }
+
+    // Assumed teammate winning → don't steal
+    if (currentWinnerSeat !== null && currentWinnerSeat === assumedTeammate) {
+      return this.smartDumpAdvanced(state, seat, validCards);
+    }
+
+    // Boss card that would actually win
+    const bossCard = validCards.find((c) => {
+      if (!this.isBossCard(state, c)) return false;
+      const test = [...orderedSoFar, c];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    if (bossCard) return bossCard;
+
+    // Void management (pre-reveal simplified)
+    const hand = state.hands[seat];
+    const isVoid = !!(state.currentSuit && (hand[state.currentSuit as Suit]?.length ?? 0) === 0);
+    if (isVoid && state.trumpSuit && state.trumpSuit !== '🚫') {
+      const currentWinnerCard = currentWinnerSeat !== null ? state.playedCards[currentWinnerSeat] : null;
+      const teammateWinningWithTrump =
+        currentWinnerSeat === assumedTeammate && currentWinnerCard?.split(' ')[1] === state.trumpSuit;
+      if (!teammateWinningWithTrump) {
+        const trumpCards = validCards.filter((c) => c.split(' ')[1] === state.trumpSuit);
+        const winningTrump = trumpCards.filter((c) => {
+          const test = [...orderedSoFar, c];
+          return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+        });
+        if (winningTrump.length > 0) return this.lowestCard(winningTrump);
+      }
+    }
+
+    // Try to win; position-aware
+    const winning = validCards.filter((c) => {
+      const test = [...orderedSoFar, c];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    if (winning.length === 0) return this.smartDumpAdvanced(state, seat, validCards);
+
+    const assumedEnemies = [0, 1, 2, 3].filter((s) => s !== seat && s !== assumedTeammate);
+    const enemyAfter = afterUs.some((s) => assumedEnemies.includes(s));
+    return enemyAfter ? this.highestCard(winning) : this.lowestCard(winning);
+  }
+
   private shufflePlayerSeats(state: GameState): void {
     const players = state.players;
     for (let i = players.length - 1; i > 0; i--) {
@@ -1900,7 +2347,7 @@ export class GameRoom extends DurableObject {
     this.ctx.waitUntil(this.scheduleBotAction());
   }
 
-  private async handleAddBot(state: GameState, playerId: string, level: 'intermediate' | 'advanced' = 'intermediate'): Promise<void> {
+  private async handleAddBot(state: GameState, playerId: string, level: 'intermediate' | 'advanced' | 'sophisticated' = 'intermediate'): Promise<void> {
     if (state.phase !== 'lobby') return;
     const requestor = state.players.find((p) => p.id === playerId);
     if (!requestor || requestor.seat !== 0) return;
@@ -1913,10 +2360,12 @@ export class GameRoom extends DurableObject {
       'Knave', 'Lucky', 'Midas', 'Nova', 'Oracle',
       'Pepper', 'Quill', 'Rogue', 'Spade', 'Thorn',
     ];
-    const prefix = level === 'advanced' ? '[A] ' : '[I] ';
+    const prefix = level === 'sophisticated' ? '[S] ' : level === 'advanced' ? '[A] ' : '[I] ';
     const usedNames = new Set(state.players.map((p) => p.name));
-    // Strip prefix when checking availability so both levels share the same name pool
-    const available = BOT_NAME_POOL.filter((n) => !usedNames.has(`[I] ${n}`) && !usedNames.has(`[A] ${n}`));
+    // Strip prefix when checking availability so all levels share the same name pool
+    const available = BOT_NAME_POOL.filter((n) =>
+      !usedNames.has(`[I] ${n}`) && !usedNames.has(`[A] ${n}`) && !usedNames.has(`[S] ${n}`),
+    );
     const picked = available.length > 0
       ? available[Math.floor(Math.random() * available.length)]
       : `Bot ${botSeat}`;
