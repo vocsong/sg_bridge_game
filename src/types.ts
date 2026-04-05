@@ -18,6 +18,7 @@ export interface Player {
   wins?: number;
   gamesPlayed?: number;
   isBot?: boolean;
+  botLevel?: 'intermediate' | 'advanced';
   isGroupMember?: boolean;
   elo?: number;
 }
@@ -84,7 +85,7 @@ export interface GameState {
 export interface PlayerGameView {
   roomCode: string;
   phase: GamePhase;
-  players: { name: string; seat: number; connected: boolean; wins?: number; gamesPlayed?: number; isBot?: boolean; isGroupMember?: boolean; elo?: number }[];
+  players: { name: string; seat: number; connected: boolean; wins?: number; gamesPlayed?: number; isBot?: boolean; botLevel?: 'intermediate' | 'advanced'; isGroupMember?: boolean; elo?: number }[];
   hand: Hand | null;
   turn: number;
   bidder: number;

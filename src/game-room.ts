@@ -147,7 +147,7 @@ export class GameRoom extends DurableObject {
         await this.handleWatchSeat(state, session.playerId, msg.seat, ws);
         break;
       case 'addBot':
-        await this.handleAddBot(state, session.playerId);
+        await this.handleAddBot(state, session.playerId, msg.level ?? 'intermediate');
         break;
       case 'removeBot':
         await this.handleRemoveBot(state, session.playerId);
@@ -283,6 +283,7 @@ export class GameRoom extends DurableObject {
         wins: p.wins,
         gamesPlayed: p.gamesPlayed,
         isBot: p.isBot,
+        botLevel: p.botLevel,
         isGroupMember: p.isGroupMember,
         elo: p.elo,
       })),
@@ -1017,7 +1018,9 @@ export class GameRoom extends DurableObject {
     if (state.phase === 'bidding') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
-      const bidNum = this.getBotBid(state, state.turn);
+      const bidNum = current.botLevel === 'advanced'
+        ? this.getBotBidAdvanced(state, state.turn)
+        : this.getBotBid(state, state.turn);
       if (bidNum !== null) {
         await this.handleBid(state, current.id, bidNum);
       } else {
@@ -1035,7 +1038,9 @@ export class GameRoom extends DurableObject {
     if (state.phase === 'play') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
-      const card = this.getBotCard(state, state.turn);
+      const card = current.botLevel === 'advanced'
+        ? this.getBotCardAdvanced(state, state.turn)
+        : this.getBotCard(state, state.turn);
       if (!card) return false;
       await this.handlePlayCard(state, current.id, card);
       return true;
@@ -1460,6 +1465,353 @@ export class GameRoom extends DurableObject {
     return 'A ♠';
   }
 
+  // --- Advanced bot (builds on intermediate as base) ---
+  // Differences: VH bidding formula, competitive step-up, partner-lead priority,
+  // second-hand-low, forced called-card reveal, active ruffing, smartDump partner constraint.
+
+  private getBotBidAdvanced(state: GameState, seat: number): number | null {
+    const hand = state.hands[seat];
+
+    // HCP (wash check: raw HCP < 4 → pass regardless of length)
+    let hcp = 0;
+    for (const suit of CARD_SUITS) {
+      for (const v of hand[suit]) {
+        hcp += v === 'A' ? 4 : v === 'K' ? 3 : v === 'Q' ? 2 : v === 'J' ? 1 : 0;
+      }
+    }
+    if (hcp < 4) return null;
+
+    // Length points: 5th card = +1, each beyond = +1
+    let lengthPts = 0;
+    for (const suit of CARD_SUITS) {
+      if (hand[suit].length >= 5) lengthPts += hand[suit].length - 4;
+    }
+
+    // Best trump suit: longest, tiebreak by HCP in suit
+    let bestSuitIdx = 4; // default NT
+    let bestLen = 0;
+    let bestSuitHCP = 0;
+    for (let si = 0; si < CARD_SUITS.length; si++) {
+      const suit = CARD_SUITS[si];
+      const sHCP = hand[suit].reduce((s, v) => s + (v === 'A' ? 4 : v === 'K' ? 3 : v === 'Q' ? 2 : v === 'J' ? 1 : 0), 0);
+      if (hand[suit].length > bestLen || (hand[suit].length === bestLen && sHCP > bestSuitHCP)) {
+        bestLen = hand[suit].length;
+        bestSuitHCP = sHCP;
+        bestSuitIdx = si;
+      }
+    }
+
+    // NT priority: balanced + stoppers in ≥3 suits + base HCP ≥ 15
+    const balanced = CARD_SUITS.every((s) => hand[s].length <= 4);
+    const stoppedSuits = CARD_SUITS.filter((s) => hand[s].includes('A') || hand[s].includes('K')).length;
+    if (balanced && stoppedSuits >= 3 && hcp >= 15) {
+      bestSuitIdx = 4;
+    } else if (bestLen <= 3) {
+      bestSuitIdx = 4; // no reliable trump suit
+    }
+
+    // Virtual honor: highest missing honor in trump suit
+    let vh = 0;
+    if (bestSuitIdx < 4) {
+      const trumpSuit = CARD_SUITS[bestSuitIdx];
+      const held = new Set(hand[trumpSuit]);
+      if (!held.has('A')) vh = 4;
+      else if (!held.has('K')) vh = 3;
+      else if (!held.has('Q')) vh = 2;
+    }
+
+    const S = hcp + lengthPts + vh;
+
+    // Max level from total strength S
+    let myMaxLevel: number;
+    if (S < 13) return null; // pass
+    else if (S < 20) myMaxLevel = 1;
+    else if (S < 24) myMaxLevel = 2;
+    else myMaxLevel = 3;
+
+    // Competitive step-up: find minimum level needed to overcall
+    let proposedLevel: number;
+    if (state.bid < 0) {
+      proposedLevel = 1; // opening bid — minimum level 1
+    } else {
+      const currentBidLevel = Math.floor(state.bid / 5) + 1;
+      const currentSuitIdx = state.bid % 5;
+      // Higher suit index = higher bid rank (♣=0 < ♦=1 < ♥=2 < ♠=3 < NT=4)
+      proposedLevel = bestSuitIdx > currentSuitIdx ? currentBidLevel : currentBidLevel + 1;
+    }
+
+    if (proposedLevel > myMaxLevel || proposedLevel > 3) return null; // pass
+
+    const bidNum = (proposedLevel - 1) * 5 + bestSuitIdx;
+    if (bidNum > state.bid && bidNum <= MAX_BID) return bidNum;
+    return null;
+  }
+
+  private getBotCardAdvanced(state: GameState, seat: number): string {
+    const hand = state.hands[seat];
+    const validSuits = getValidSuits(hand, state.trumpSuit, state.currentSuit, state.trumpBroken);
+    if (validSuits.length === 0) return '';
+
+    const validCards: string[] = [];
+    for (const suit of validSuits) {
+      for (const value of hand[suit]) {
+        validCards.push(`${value} ${suit}`);
+      }
+    }
+    if (validCards.length === 0) return '';
+
+    const trickInProgress = !state.trickComplete && state.playedCards.some((c) => c !== null);
+    const onBidderTeam = this.isOnBidderTeam(state, seat);
+    const confidence = this.isPartnerCardRevealed(state) ? 0.85 : 0.65;
+    const useTeamLogic = state.partner >= 0 && Math.random() < confidence;
+
+    if (!trickInProgress) {
+      return useTeamLogic
+        ? this.getBotLeadCardAdvanced(state, seat, validCards, onBidderTeam)
+        : this.lowestCard(validCards);
+    }
+
+    if (useTeamLogic) {
+      return onBidderTeam
+        ? this.getBotCardAsBidderTeamAdvanced(state, seat, validCards)
+        : this.getBotCardAsOppositionAdvanced(state, seat, validCards);
+    }
+
+    // Basic fallback
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const winningCards = validCards.filter((card) => {
+      const test = [...orderedSoFar, card];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    return winningCards.length > 0 ? this.lowestCard(winningCards) : this.smartDumpAdvanced(state, seat, validCards);
+  }
+
+  private getBotLeadCardAdvanced(
+    state: GameState,
+    seat: number,
+    validCards: string[],
+    onBidderTeam: boolean,
+  ): string {
+    const partnerBidSuits = this.getPartnerBidSuits(state);
+    const bidderBidSuits = this.getBidderBidSuits(state);
+    const voids = this.getVoids(state);
+    const calledSuit = this.getCalledSuit(state);
+
+    if (onBidderTeam) {
+      // Partner leading: priority 1 = lead low in called suit; priority 2 = bidder's bid suit
+      if (seat === state.partner && calledSuit) {
+        const calledSuitCards = validCards.filter((c) => c.split(' ')[1] === calledSuit);
+        if (calledSuitCards.length > 0) return this.lowestCard(calledSuitCards);
+        const bidderSuitCards = validCards.filter(
+          (c) => bidderBidSuits.has(c.split(' ')[1]) && c.split(' ')[1] !== state.trumpSuit,
+        );
+        if (bidderSuitCards.length > 0) return this.highestCard(bidderSuitCards);
+      }
+
+      // Prefer leading a suit the partner bid (established length signal)
+      const partnerSuitCards = validCards.filter(
+        (c) => partnerBidSuits.has(c.split(' ')[1]) && c.split(' ')[1] !== state.trumpSuit,
+      );
+      if (partnerSuitCards.length > 0) return this.highestCard(partnerSuitCards);
+
+      // Bidder void in a side suit: 50% force trump lead (draw out opponent trumps)
+      if (seat === state.bidder && state.trumpSuit && state.trumpSuit !== '🚫') {
+        const hasVoidInSideSuit = CARD_SUITS.some(
+          (s) => s !== state.trumpSuit && state.hands[seat][s].length === 0,
+        );
+        if (hasVoidInSideSuit && Math.random() < 0.5) {
+          const trumpCards = validCards.filter((c) => c.split(' ')[1] === state.trumpSuit);
+          if (trumpCards.length > 0) return this.highestCard(trumpCards);
+        }
+      }
+
+      // Avoid suits where an opponent is void (would ruff)
+      const oppSeats = [0, 1, 2, 3].filter((s) => s !== seat && !this.isOnBidderTeam(state, s));
+      const nonRuffable = validCards.filter((c) => {
+        const suit = c.split(' ')[1] as Suit;
+        if (suit === state.trumpSuit) return false;
+        return !oppSeats.some((s) => voids.get(s)?.has(suit));
+      });
+      return this.leadLongestNonTrump(state, seat, nonRuffable.length > 0 ? nonRuffable : validCards);
+    } else {
+      // Opposition: K or Q in called suit → 70% lead high (reveal test), 30% normal
+      if (calledSuit) {
+        const calledSuitCards = validCards.filter((c) => c.split(' ')[1] === calledSuit);
+        const hasRevealHonor = calledSuitCards.some((c) => ['K', 'Q'].includes(c.split(' ')[0]));
+        if (hasRevealHonor && Math.random() < 0.7) {
+          return this.highestCard(calledSuitCards);
+        }
+      }
+
+      // Avoid bidder/partner bid suits and ruffable suits
+      const bidderTeamSeats = [0, 1, 2, 3].filter((s) => this.isOnBidderTeam(state, s));
+      const safe = validCards.filter((c) => {
+        const suit = c.split(' ')[1];
+        if (suit === state.trumpSuit) return false;
+        if (bidderBidSuits.has(suit) || partnerBidSuits.has(suit)) return false;
+        return !bidderTeamSeats.some((s) => voids.get(s)?.has(suit as Suit));
+      });
+      if (safe.length > 0) return this.lowestCard(safe);
+      const nonTrump = validCards.filter((c) => c.split(' ')[1] !== state.trumpSuit);
+      return this.lowestCard(nonTrump.length > 0 ? nonTrump : validCards);
+    }
+  }
+
+  private getBotCardAsBidderTeamAdvanced(state: GameState, seat: number, validCards: string[]): string {
+    const hand = state.hands[seat];
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const currentWinnerSeat = this.getCurrentTrickWinnerSeat(state);
+    const afterUs = this.getPlayersAfter(state, seat);
+    const calledSuit = this.getCalledSuit(state);
+
+    // §4.2 Partner reveal: forced play of called card when opp winning + void risk low
+    if (seat === state.partner && state.partnerCard && state.currentSuit && calledSuit) {
+      const holdsCalledCard = validCards.includes(state.partnerCard);
+      const bidderLedCalledSuit = state.currentSuit === calledSuit;
+      const oppWinning = currentWinnerSeat !== null && !this.isOnBidderTeam(state, currentWinnerSeat);
+      const fewInSuit = hand[calledSuit].length < 4;
+      if (holdsCalledCard && bidderLedCalledSuit && oppWinning && fewInSuit) {
+        return state.partnerCard;
+      }
+    }
+
+    // Teammate already winning — don't steal the trick
+    if (currentWinnerSeat !== null && this.isOnBidderTeam(state, currentWinnerSeat)) {
+      return this.smartDumpAdvanced(state, seat, validCards);
+    }
+
+    // §4.1 Second-hand-low: playing 2nd, teammate still to play, holding K/Q/J → 70% play low
+    if (orderedSoFar.length === 1 && afterUs.some((s) => this.isOnBidderTeam(state, s))) {
+      const hasHonor = validCards.some((c) => ['K', 'Q', 'J'].includes(c.split(' ')[0]));
+      if (hasHonor && Math.random() < 0.7) {
+        const nonHonors = validCards.filter((c) => !['A', 'K', 'Q', 'J'].includes(c.split(' ')[0]));
+        return nonHonors.length > 0 ? this.lowestCard(nonHonors) : this.lowestCard(validCards);
+      }
+    }
+
+    // Boss card that would actually win this trick
+    const bossCard = validCards.find((c) => {
+      if (!this.isBossCard(state, c)) return false;
+      const test = [...orderedSoFar, c];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    if (bossCard) return bossCard;
+
+    // §4.3 Void management (partner): ruff if opp winning and trump wins
+    const isVoidInLedSuit = !!(state.currentSuit && hand[state.currentSuit as import('./types').Suit]?.length === 0);
+    const oppWinningNow = currentWinnerSeat !== null && !this.isOnBidderTeam(state, currentWinnerSeat);
+    if (isVoidInLedSuit && oppWinningNow && state.trumpSuit && state.trumpSuit !== '🚫') {
+      const trumpCards = validCards.filter((c) => c.split(' ')[1] === state.trumpSuit);
+      const winningTrump = trumpCards.filter((c) => {
+        const test = [...orderedSoFar, c];
+        return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+      });
+      if (winningTrump.length > 0) return this.lowestCard(winningTrump);
+    }
+
+    const partnerBidSuits = this.getPartnerBidSuits(state);
+    const teammateIsLast = afterUs.length > 0 && this.isOnBidderTeam(state, afterUs[afterUs.length - 1]);
+
+    if (teammateIsLast) {
+      const ledSuitIsPartnerStrength = state.currentSuit && partnerBidSuits.has(state.currentSuit);
+      if (!ledSuitIsPartnerStrength) return this.smartDumpAdvanced(state, seat, validCards);
+    }
+
+    const winning = validCards.filter((card) => {
+      const test = [...orderedSoFar, card];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    if (winning.length === 0) return this.smartDumpAdvanced(state, seat, validCards);
+
+    const opponentAfter = afterUs.some((s) => !this.isOnBidderTeam(state, s));
+    return opponentAfter ? this.highestCard(winning) : this.lowestCard(winning);
+  }
+
+  private getBotCardAsOppositionAdvanced(state: GameState, seat: number, validCards: string[]): string {
+    const hand = state.hands[seat];
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const currentWinnerSeat = this.getCurrentTrickWinnerSeat(state);
+    const afterUs = this.getPlayersAfter(state, seat);
+
+    // Opposition teammate already winning — don't steal
+    if (currentWinnerSeat !== null && !this.isOnBidderTeam(state, currentWinnerSeat)) {
+      return this.smartDumpAdvanced(state, seat, validCards);
+    }
+
+    // §4.1 Second-hand-low: playing 2nd, opp teammate still to play, holding K/Q/J → 70% play low
+    if (orderedSoFar.length === 1 && afterUs.some((s) => !this.isOnBidderTeam(state, s))) {
+      const hasHonor = validCards.some((c) => ['K', 'Q', 'J'].includes(c.split(' ')[0]));
+      if (hasHonor && Math.random() < 0.7) {
+        const nonHonors = validCards.filter((c) => !['A', 'K', 'Q', 'J'].includes(c.split(' ')[0]));
+        return nonHonors.length > 0 ? this.lowestCard(nonHonors) : this.lowestCard(validCards);
+      }
+    }
+
+    // Boss card that would actually win this trick
+    const bossCard = validCards.find((c) => {
+      if (!this.isBossCard(state, c)) return false;
+      const test = [...orderedSoFar, c];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    if (bossCard) return bossCard;
+
+    // §4.3 Void management (opposition)
+    const isVoidInLedSuit = !!(state.currentSuit && hand[state.currentSuit as import('./types').Suit]?.length === 0);
+    if (isVoidInLedSuit && state.trumpSuit && state.trumpSuit !== '🚫') {
+      // Opp teammate winning with trump → no-stack rule: smartDump
+      const currentWinnerCard = currentWinnerSeat !== null ? state.playedCards[currentWinnerSeat] : null;
+      const teammateWinningWithTrump =
+        currentWinnerSeat !== null &&
+        !this.isOnBidderTeam(state, currentWinnerSeat) &&
+        currentWinnerCard?.split(' ')[1] === state.trumpSuit;
+      if (teammateWinningWithTrump) return this.smartDumpAdvanced(state, seat, validCards);
+
+      // Bidder team winning → ruff if possible
+      const bidderTeamWinning = currentWinnerSeat !== null && this.isOnBidderTeam(state, currentWinnerSeat);
+      if (bidderTeamWinning) {
+        const trumpCards = validCards.filter((c) => c.split(' ')[1] === state.trumpSuit);
+        const winningTrump = trumpCards.filter((c) => {
+          const test = [...orderedSoFar, c];
+          return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+        });
+        if (winningTrump.length > 0) return this.lowestCard(winningTrump);
+      }
+    }
+
+    const bidderBidSuits = this.getBidderBidSuits(state);
+    const oppTeammateIsLast = afterUs.length > 0 && !this.isOnBidderTeam(state, afterUs[afterUs.length - 1]);
+
+    if (oppTeammateIsLast) {
+      const ledSuitIsBidderStrength = state.currentSuit && bidderBidSuits.has(state.currentSuit);
+      if (!ledSuitIsBidderStrength) return this.smartDumpAdvanced(state, seat, validCards);
+    }
+
+    const winning = validCards.filter((card) => {
+      const test = [...orderedSoFar, card];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
+    if (winning.length === 0) return this.smartDumpAdvanced(state, seat, validCards);
+
+    const bidderTeamAfter = afterUs.some((s) => this.isOnBidderTeam(state, s));
+    return bidderTeamAfter ? this.highestCard(winning) : this.lowestCard(winning);
+  }
+
+  /** Advanced smartDump: same as base but partner never discards the called card unless last card. */
+  private smartDumpAdvanced(state: GameState, seat: number, validCards: string[]): string {
+    let pool = validCards;
+    if (seat === state.partner && state.partnerCard && validCards.length > 1) {
+      const filtered = validCards.filter((c) => c !== state.partnerCard);
+      if (filtered.length > 0) pool = filtered;
+    }
+    return this.smartDump(state, seat, pool);
+  }
+
+  /** Returns the suit of the called partner card, or null if not set. */
+  private getCalledSuit(state: GameState): Suit | null {
+    if (!state.partnerCard) return null;
+    return state.partnerCard.split(' ')[1] as Suit;
+  }
+
   private shufflePlayerSeats(state: GameState): void {
     const players = state.players;
     for (let i = players.length - 1; i > 0; i--) {
@@ -1532,7 +1884,7 @@ export class GameRoom extends DurableObject {
     this.ctx.waitUntil(this.scheduleBotAction());
   }
 
-  private async handleAddBot(state: GameState, playerId: string): Promise<void> {
+  private async handleAddBot(state: GameState, playerId: string, level: 'intermediate' | 'advanced' = 'intermediate'): Promise<void> {
     if (state.phase !== 'lobby') return;
     const requestor = state.players.find((p) => p.id === playerId);
     if (!requestor || requestor.seat !== 0) return;
@@ -1545,18 +1897,21 @@ export class GameRoom extends DurableObject {
       'Knave', 'Lucky', 'Midas', 'Nova', 'Oracle',
       'Pepper', 'Quill', 'Rogue', 'Spade', 'Thorn',
     ];
+    const prefix = level === 'advanced' ? '[A] ' : '[I] ';
     const usedNames = new Set(state.players.map((p) => p.name));
-    const available = BOT_NAME_POOL.filter((n) => !usedNames.has(n));
+    // Strip prefix when checking availability so both levels share the same name pool
+    const available = BOT_NAME_POOL.filter((n) => !usedNames.has(`[I] ${n}`) && !usedNames.has(`[A] ${n}`));
     const picked = available.length > 0
       ? available[Math.floor(Math.random() * available.length)]
       : `Bot ${botSeat}`;
-    const botName = picked;
+    const botName = `${prefix}${picked}`;
     const bot: import('./types').Player = {
       id: `bot_${botSeat}`,
       name: botName,
       seat: botSeat,
       connected: true,
       isBot: true,
+      botLevel: level,
     };
     state.players.push(bot);
 

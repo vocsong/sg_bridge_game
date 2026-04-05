@@ -949,7 +949,7 @@ function renderLobby(s) {
   for (const p of s.players) {
     const item = document.createElement('div');
     item.className = 'player-item';
-    const botIcon = p.isBot ? '<span class="bot-icon">🤖</span>' : '';
+    const botIcon = p.isBot ? `<span class="bot-icon">${p.botLevel === 'advanced' ? '🧠' : '🤖'}</span>` : '';
     const eloStr = (!p.isBot && p.elo) ? `ELO ${p.elo} · ` : '';
     const statsHtml = (!p.isBot && p.gamesPlayed)
       ? `<span class="lobby-stats">${eloStr}${p.wins}W / ${p.gamesPlayed}G</span>`
@@ -994,12 +994,15 @@ function renderLobby(s) {
       : 'Game starting...';
   }
 
-  const addBotBtn = $('lobby-add-bot');
-  if (addBotBtn) {
+  const addIntBotBtn = $('lobby-add-int-bot');
+  const addAdvBotBtn = $('lobby-add-adv-bot');
+  if (addIntBotBtn && addAdvBotBtn) {
     if (isHost && remaining > 0) {
-      addBotBtn.classList.remove('hidden');
+      addIntBotBtn.classList.remove('hidden');
+      addAdvBotBtn.classList.remove('hidden');
     } else {
-      addBotBtn.classList.add('hidden');
+      addIntBotBtn.classList.add('hidden');
+      addAdvBotBtn.classList.add('hidden');
     }
   }
 
