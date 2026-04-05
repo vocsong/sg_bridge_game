@@ -35,8 +35,8 @@ export class GameRoom extends DurableObject {
     const url = new URL(request.url);
 
     if (url.pathname === '/create' && request.method === 'POST') {
-      const { roomCode, groupId, groupName } = (await request.json()) as { roomCode: string; groupId?: string | null; groupName?: string | null };
-      const state = this.createInitialState(roomCode, groupId ?? null, groupName ?? null);
+      const { roomCode, groupId, groupName, origin } = (await request.json()) as { roomCode: string; groupId?: string | null; groupName?: string | null; origin?: string | null };
+      const state = this.createInitialState(roomCode, groupId ?? null, groupName ?? null, origin ?? null);
       await this.ctx.storage.put('state', state);
       return Response.json({ ok: true });
     }
@@ -221,7 +221,7 @@ export class GameRoom extends DurableObject {
 
   // --- State helpers ---
 
-  private createInitialState(roomCode: string, groupId: string | null = null, groupName: string | null = null): GameState {
+  private createInitialState(roomCode: string, groupId: string | null = null, groupName: string | null = null, origin: string | null = null): GameState {
     return {
       roomCode,
       phase: 'lobby',
@@ -254,6 +254,7 @@ export class GameRoom extends DurableObject {
       trickLog: [],
       trickWinners: [],
       initialHands: [],
+      origin,
     };
   }
 
@@ -474,6 +475,18 @@ export class GameRoom extends DurableObject {
     }
     await this.saveState(state);
     this.broadcastFullState(state);
+
+    // Notify Telegram group on each new join
+    if (state.groupId && state.origin) {
+      const playerNames = state.players.map((p) => p.name).join(', ');
+      const n = state.players.length;
+      const joinLink = `${state.origin}/#${state.roomCode}`;
+      sendMessage(
+        (this.env as Env).TELEGRAM_BOT_TOKEN,
+        state.groupId,
+        `👤 <b>${name}</b> joined the lobby! (${n}/4)\nPlayers: ${playerNames}\n🃏 Join → ${joinLink}`,
+      ).catch(() => {});
+    }
   }
 
   private async handleBid(

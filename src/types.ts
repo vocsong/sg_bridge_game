@@ -78,6 +78,7 @@ export interface GameState {
   trickLog: TrickLogEntry[];
   trickWinners: number[];
   initialHands: Hand[];
+  origin: string | null;
 }
 
 export interface PlayerGameView {

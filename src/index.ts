@@ -88,14 +88,14 @@ export default {
       const body = await request.json<{ groupId?: string | null; groupName?: string | null; sendInvite?: boolean; fromName?: string }>().catch(() => ({} as { groupId?: string | null; groupName?: string | null; sendInvite?: boolean; fromName?: string }));
       const roomCode = generateRoomCode();
       const stub = env.GAME_ROOM.getByName(roomCode);
+      const origin = new URL(request.url).origin;
       await stub.fetch(
         new Request('https://internal/create', {
           method: 'POST',
-          body: JSON.stringify({ roomCode, groupId: body.groupId ?? null, groupName: body.groupName ?? null }),
+          body: JSON.stringify({ roomCode, groupId: body.groupId ?? null, groupName: body.groupName ?? null, origin }),
         }),
       );
       if (body.sendInvite && body.groupId) {
-        const origin = new URL(request.url).origin;
         const fromName = body.fromName ?? 'Someone';
         sendMessage(
           env.TELEGRAM_BOT_TOKEN,
@@ -156,7 +156,7 @@ export default {
         await stub.fetch(
           new Request('https://internal/create', {
             method: 'POST',
-            body: JSON.stringify({ roomCode, groupId: cmd.chatId, groupName: cmd.groupName }),
+            body: JSON.stringify({ roomCode, groupId: cmd.chatId, groupName: cmd.groupName, origin }),
           }),
         );
         await sendMessage(
