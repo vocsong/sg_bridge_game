@@ -1067,13 +1067,13 @@ export class GameRoom extends DurableObject {
         : this.getBotCardAsOpposition(state, seat, validCards);
     }
 
-    // Basic fallback: win if possible, else lowest
+    // Basic fallback: win if possible, else smartDump (avoids trump + prefers shortest side suit)
     const orderedSoFar = this.getOrderedCardsPlayed(state);
     const winningCards = validCards.filter((card) => {
       const test = [...orderedSoFar, card];
       return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
     });
-    return winningCards.length > 0 ? this.lowestCard(winningCards) : this.lowestCard(validCards);
+    return winningCards.length > 0 ? this.lowestCard(winningCards) : this.smartDump(state, seat, validCards);
   }
 
   private getBotCardAsBidderTeam(state: GameState, seat: number, validCards: string[]): string {
@@ -1084,8 +1084,15 @@ export class GameRoom extends DurableObject {
       return this.smartDump(state, seat, validCards);
     }
 
-    // Boss card: guaranteed winner regardless of position — always play it
-    const bossCard = validCards.find((c) => this.isBossCard(state, c));
+    // Boss card that would actually win this trick — always play it.
+    // Must verify with compareCards: a boss card in a non-led, non-trump suit (e.g. A♣ when void
+    // in the led suit) is NOT a trick winner and must not be played as a discard.
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const bossCard = validCards.find((c) => {
+      if (!this.isBossCard(state, c)) return false;
+      const test = [...orderedSoFar, c];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
     if (bossCard) return bossCard;
 
     const afterUs = this.getPlayersAfter(state, seat);
@@ -1100,7 +1107,6 @@ export class GameRoom extends DurableObject {
     }
 
     // Opposition winning — try to win
-    const orderedSoFar = this.getOrderedCardsPlayed(state);
     const winning = validCards.filter((card) => {
       const test = [...orderedSoFar, card];
       return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
@@ -1121,8 +1127,13 @@ export class GameRoom extends DurableObject {
       return this.smartDump(state, seat, validCards);
     }
 
-    // Boss card: guaranteed winner regardless of position — always play it
-    const bossCard = validCards.find((c) => this.isBossCard(state, c));
+    // Boss card that would actually win this trick (same void-in-led-suit guard as bidder team).
+    const orderedSoFar = this.getOrderedCardsPlayed(state);
+    const bossCard = validCards.find((c) => {
+      if (!this.isBossCard(state, c)) return false;
+      const test = [...orderedSoFar, c];
+      return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
+    });
     if (bossCard) return bossCard;
 
     const afterUs = this.getPlayersAfter(state, seat);
@@ -1138,7 +1149,6 @@ export class GameRoom extends DurableObject {
     }
 
     // Bidder team winning — try to beat them
-    const orderedSoFar = this.getOrderedCardsPlayed(state);
     const winning = validCards.filter((card) => {
       const test = [...orderedSoFar, card];
       return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
