@@ -1796,7 +1796,13 @@ export class GameRoom extends DurableObject {
     return bidderTeamAfter ? this.highestCard(winning) : this.lowestCard(winning);
   }
 
-  /** Advanced smartDump: never discard called card (partner), never discard honors unless forced. */
+  /**
+   * Advanced smartDump — discard priority (lowest cost first):
+   *   1. non-trump non-honors  (dump these first)
+   *   2. non-trump honors      (only if no option 1 remains)
+   *   3. trump                 (last resort)
+   * Partner constraint: never discard the called card unless it is the only card.
+   */
   private smartDumpAdvanced(state: GameState, seat: number, validCards: string[]): string {
     let pool = validCards;
     // Partner: never dump the called card unless it is the only card left
@@ -1804,11 +1810,15 @@ export class GameRoom extends DurableObject {
       const filtered = pool.filter((c) => c !== state.partnerCard);
       if (filtered.length > 0) pool = filtered;
     }
-    // Never dump an honor (A, K, Q, J) if non-honor alternatives exist
-    if (pool.length > 1) {
-      const nonHonors = pool.filter((c) => !['A', 'K', 'Q', 'J'].includes(c.split(' ')[0]));
-      if (nonHonors.length > 0) pool = nonHonors;
-    }
+    // Tier 1: non-trump non-honors
+    const tier1 = pool.filter(
+      (c) => c.split(' ')[1] !== state.trumpSuit && !['A', 'K', 'Q', 'J'].includes(c.split(' ')[0]),
+    );
+    if (tier1.length > 0) return this.smartDump(state, seat, tier1);
+    // Tier 2: non-trump (honors included)
+    const tier2 = pool.filter((c) => c.split(' ')[1] !== state.trumpSuit);
+    if (tier2.length > 0) return this.smartDump(state, seat, tier2);
+    // Tier 3: trump only — no choice
     return this.smartDump(state, seat, pool);
   }
 
