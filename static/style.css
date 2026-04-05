@@ -428,9 +428,9 @@ body.has-spectators .screen {
   padding: 2px 4px;
   border-radius: 4px;
 }
-.bid-hist-name { color: var(--text-dim); }
-.bid-hist-dash { color: var(--text-dimmer); }
-.bid-hist-val { color: var(--accent-light); font-weight: 600; }
+.bid-hist-name { color: var(--text-dim); min-width: 7rem; text-align: right; }
+.bid-hist-dash { color: var(--text-dimmer); margin: 0 0.4rem; }
+.bid-hist-val { color: var(--accent-light); font-weight: 600; min-width: 5rem; }
 .bid-hist-pass .bid-hist-val { color: var(--text-dimmer); font-weight: 400; }
 .bid-grid {
   display: grid;
