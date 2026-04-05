@@ -79,8 +79,10 @@ if !trickInProgress:
 else if useTeamLogic:
   → getBotCardAsBidderTeam or getBotCardAsOpposition
 else:
-  → basic fallback: lowestCard(winning) or lowestCard(all)
+  → basic fallback: lowestCard(winning) or smartDump
 ```
+
+**Basic fallback discard rule:** when the bot cannot win the trick (e.g. confidence roll failed), it calls `smartDump` rather than `lowestCard(validCards)`. This prevents the bot from accidentally ruffing with trump or throwing away a high honour on the low-confidence path. "Dump low from shortest non-trump suit" is the universal rule for unforced discards.
 
 ---
 
@@ -160,10 +162,10 @@ Discards the **lowest card from the shortest non-trump side suit**.
 
 Logic:
 1. Filter to non-trump cards (unless all cards are trump — then use all).
-2. Among those, find the suit with the fewest cards in hand.
+2. Among those, find the suit with the fewest cards in hand (by current hand length).
 3. Return the lowest card in that suit.
 
-Rationale: burning a short, weak side suit is low-cost and avoids wasting trump or established long suits.
+Rationale: burning a short, weak side suit is low-cost and avoids wasting trump or established long suits. This is the **universal discard rule** for all unforced discards — used by both team-logic branches and the basic fallback. The bot never intentionally discards a high card for signalling or unblocking purposes.
 
 ---
 

@@ -1067,13 +1067,13 @@ export class GameRoom extends DurableObject {
         : this.getBotCardAsOpposition(state, seat, validCards);
     }
 
-    // Basic fallback: win if possible, else lowest
+    // Basic fallback: win if possible, else smartDump (avoids trump + prefers shortest side suit)
     const orderedSoFar = this.getOrderedCardsPlayed(state);
     const winningCards = validCards.filter((card) => {
       const test = [...orderedSoFar, card];
       return compareCards(test, state.currentSuit!, state.trumpSuit) === test.length - 1;
     });
-    return winningCards.length > 0 ? this.lowestCard(winningCards) : this.lowestCard(validCards);
+    return winningCards.length > 0 ? this.lowestCard(winningCards) : this.smartDump(state, seat, validCards);
   }
 
   private getBotCardAsBidderTeam(state: GameState, seat: number, validCards: string[]): string {
