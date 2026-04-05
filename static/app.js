@@ -1279,6 +1279,19 @@ function renderGameoverHands(s) {
 
   const log = s.trickLog;
 
+  function makeWrap(el, isTrickWinner) {
+    const wrap = document.createElement('div');
+    wrap.className = 'card-win-wrap';
+    wrap.appendChild(el);
+    if (isTrickWinner) {
+      const star = document.createElement('span');
+      star.className = 'trick-star';
+      star.textContent = '✦';
+      wrap.appendChild(star);
+    }
+    return wrap;
+  }
+
   // Render one row per player in seat order (0–3)
   const sorted = [...s.players].sort((a, b) => a.seat - b.seat);
   for (const p of sorted) {
@@ -1289,9 +1302,23 @@ function renderGameoverHands(s) {
     const row = document.createElement('div');
     row.className = 'gameover-hand-row';
 
+    // Label with Bidder / Partner role badge
     const label = document.createElement('div');
     label.className = 'hand-label';
-    label.textContent = p.name;
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = p.name;
+    label.appendChild(nameSpan);
+    if (p.seat === s.bidder) {
+      const role = document.createElement('span');
+      role.className = 'hand-role bidder';
+      role.textContent = 'Bidder';
+      label.appendChild(role);
+    } else if (p.seat === s.partnerSeat && s.partnerSeat >= 0) {
+      const role = document.createElement('span');
+      role.className = 'hand-role partner';
+      role.textContent = 'Partner';
+      label.appendChild(role);
+    }
     row.appendChild(label);
 
     const cards = document.createElement('div');
@@ -1305,12 +1332,14 @@ function renderGameoverHands(s) {
       for (const e of seatPlays) {
         const parsed = parseLoggedCard(e.card);
         if (!parsed) continue;
+        const isTrump = s.trumpSuit && parsed.suit === s.trumpSuit && s.trumpSuit !== '🚫';
+        const isPartnerCard = e.card === s.partnerCard;
+        const isTrickWinner = s.trickWinners && s.trickWinners[e.trickNum - 1] === e.seat;
         const el = createCardEl(parsed.value, parsed.suit, { mini: true });
         el.classList.add(`po-${e.playOrder}`);
-        if (s.trickWinners && s.trickWinners[e.trickNum - 1] === e.seat) {
-          el.classList.add('trick-winner');
-        }
-        cards.appendChild(el);
+        if (isTrump) el.classList.add('card-trump-fire');
+        if (isPartnerCard) el.classList.add('card-partner-glow');
+        cards.appendChild(makeWrap(el, isTrickWinner));
       }
       // Unplayed cards (game ended early) appended faded at the right
       if (finalHand) {
@@ -1318,7 +1347,7 @@ function renderGameoverHands(s) {
           for (const value of (finalHand[suit] || [])) {
             const el = createCardEl(value, suit, { mini: true });
             el.classList.add('played');
-            cards.appendChild(el);
+            cards.appendChild(makeWrap(el, false));
           }
         }
       }
@@ -1331,7 +1360,7 @@ function renderGameoverHands(s) {
           const played = !finalSet.has(value);
           const el = createCardEl(value, suit, { mini: true });
           if (played) el.classList.add('played');
-          cards.appendChild(el);
+          cards.appendChild(makeWrap(el, false));
         }
       }
     }
