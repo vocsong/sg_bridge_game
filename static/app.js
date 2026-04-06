@@ -432,8 +432,6 @@ function showGameSection(name) {
 }
 
 // --- Screen management ---
-const CHAT_SCREENS = new Set(['screen-lobby', 'screen-bidding', 'screen-partner', 'screen-play', 'screen-gameover', 'screen-spectator']);
-
 function showScreen(id) {
   screens.forEach((s) => s.classList.remove('active'));
   screens.forEach((s) => s.classList.add('hidden'));
@@ -448,12 +446,6 @@ function showScreen(id) {
     topBar.classList.remove('hidden');
     $('top-bar-room').textContent = roomCode || '';
     $('top-bar-name').textContent = playerName || '';
-  }
-
-  const gameChat = $('game-chat');
-  if (gameChat) {
-    if (CHAT_SCREENS.has(id)) gameChat.classList.remove('hidden');
-    else gameChat.classList.add('hidden');
   }
 }
 
@@ -759,7 +751,7 @@ function handleMessage(msg) {
       // State update follows from the server's broadcastFullState — no manual action needed
       break;
     case 'chat':
-      appendChatMessage(msg.name, msg.text);
+      appendChatMessage(msg.name, msg.seat, msg.text);
       break;
     case 'playerDisconnected':
       showConnectionToast(`${msg.name} disconnected`);
@@ -825,62 +817,45 @@ function showTrickWonBanner(winnerName) {
   }, 1200);
 }
 
-function showLastTrick() {
-  if (!gameState || !gameState.lastTrick) return;
+function renderLastTrickPanel(s) {
+  const panel = $('last-trick-panel');
+  if (!panel) return;
+  if (!s.lastTrick) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  const lt = s.lastTrick;
+  const mySeat = s.mySeat ?? 0;
+  const seatOrder = [mySeat, (mySeat+1)%4, (mySeat+2)%4, (mySeat+3)%4];
+  // visual positions: bot=me, left, top=across, right
+  const positions = ['bot', 'left', 'top', 'right'];
 
-  const existing = $('last-trick-popup');
-  if (existing) { existing.remove(); return; }
+  panel.innerHTML = '';
+  const lbl = document.createElement('div');
+  lbl.className = 'ltp-label';
+  lbl.textContent = 'Last Trick';
+  panel.appendChild(lbl);
 
-  const lt = gameState.lastTrick;
-  const overlay = document.createElement('div');
-  overlay.id = 'last-trick-popup';
-  overlay.className = 'last-trick-overlay';
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
+  const grid = document.createElement('div');
+  grid.className = 'ltp-grid';
 
-  const box = document.createElement('div');
-  box.className = 'last-trick-box';
-
-  const title = document.createElement('div');
-  title.className = 'last-trick-title';
-  const winnerName = gameState.players[lt.winner]?.name || '?';
-  title.textContent = `Last Trick — won by ${winnerName}`;
-  box.appendChild(title);
-
-  const cards = document.createElement('div');
-  cards.className = 'last-trick-cards';
-
-  for (let seat = 0; seat < 4; seat++) {
+  for (let i = 0; i < 4; i++) {
+    const seat = seatOrder[i];
+    const pos = positions[i];
     const card = lt.cards[seat];
-    if (!card) continue;
-    const wrapper = document.createElement('div');
-    wrapper.className = 'last-trick-card-item';
-
-    const label = document.createElement('div');
-    label.className = 'last-trick-player-label';
-    label.textContent = gameState.players[seat]?.name || `Seat ${seat + 1}`;
-    if (seat === lt.winner) label.classList.add('winner');
-
-    const parts = card.split(' ');
-    const trumpFire = isTrumpPlaySuit(parts[1], gameState.trumpSuit);
-    const cardEl = createCardEl(parts[0], parts[1], { mini: false, trumpFire });
-
-    wrapper.appendChild(label);
-    wrapper.appendChild(cardEl);
-    cards.appendChild(wrapper);
+    const item = document.createElement('div');
+    item.className = `ltp-item ltp-${pos}`;
+    if (seat === lt.winner) item.classList.add('ltp-winner');
+    if (card) {
+      const parts = card.split(' ');
+      const trumpFire = isTrumpPlaySuit(parts[1], s.trumpSuit);
+      item.appendChild(createCardEl(parts[0], parts[1], { mini: true, trumpFire }));
+    }
+    grid.appendChild(item);
   }
 
-  box.appendChild(cards);
-
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'btn btn-small';
-  closeBtn.textContent = 'Close';
-  closeBtn.addEventListener('click', () => overlay.remove());
-  box.appendChild(closeBtn);
-
-  overlay.appendChild(box);
-  document.body.appendChild(overlay);
+  panel.appendChild(grid);
 }
 
 // --- Render based on full state ---
@@ -1050,43 +1025,54 @@ function renderLobby(s) {
   }
 }
 
-// --- In-game chat ---
+// --- Chat ---
 const CHAT_MAX_MESSAGES = 50;
-let chatCollapsed = false;
-let chatUnread = 0;
+const chatMessages = []; // { name, text }
+const CHAT_BUBBLE_MS = 4000;
+const chatBubbleTimers = {};
 
-function toggleChat() {
-  chatCollapsed = !chatCollapsed;
-  const chat = $('game-chat');
-  if (chat) chat.classList.toggle('collapsed', chatCollapsed);
-  if (!chatCollapsed) {
-    chatUnread = 0;
-    const badge = $('chat-unread');
-    if (badge) badge.classList.add('hidden');
-    const msgs = $('game-chat-messages');
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
-  }
-}
-
-function appendChatMessage(name, text) {
-  const el = $('game-chat-messages');
-  if (!el) return;
+function makeChatMsgEl(name, text) {
   const div = document.createElement('div');
   div.className = 'chat-msg';
   div.innerHTML = `<span class="chat-name">${esc(name)}</span>${esc(text)}`;
-  el.appendChild(div);
-  while (el.children.length > CHAT_MAX_MESSAGES) el.removeChild(el.firstChild);
-  if (chatCollapsed) {
-    chatUnread++;
-    const badge = $('chat-unread');
-    if (badge) { badge.textContent = chatUnread > 9 ? '9+' : String(chatUnread); badge.classList.remove('hidden'); }
-  } else {
-    el.scrollTop = el.scrollHeight;
+  return div;
+}
+
+function appendToChatLog(logEl, name, text) {
+  logEl.appendChild(makeChatMsgEl(name, text));
+  while (logEl.children.length > CHAT_MAX_MESSAGES) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function showChatBubble(seat, text) {
+  if (!gameState) return;
+  const rel = (seat - gameState.mySeat + 4) % 4;
+  const positions = ['bottom', 'left', 'top', 'right'];
+  const pos = positions[rel];
+  const bubble = $(`chat-bubble-${pos}`);
+  if (!bubble) return;
+  bubble.textContent = text;
+  bubble.classList.add('visible');
+  clearTimeout(chatBubbleTimers[pos]);
+  chatBubbleTimers[pos] = setTimeout(() => bubble.classList.remove('visible'), CHAT_BUBBLE_MS);
+}
+
+function appendChatMessage(name, seat, text) {
+  chatMessages.push({ name, text });
+  if (chatMessages.length > CHAT_MAX_MESSAGES) chatMessages.shift();
+
+  // Append to all visible inline chat logs
+  for (const log of document.querySelectorAll('.inline-chat-log')) {
+    appendToChatLog(log, name, text);
+  }
+
+  // Show bubble on play screen
+  if (seat >= 0 && $('screen-play') && $('screen-play').classList.contains('active')) {
+    showChatBubble(seat, text);
   }
 }
 
-function sendChat() {
-  const input = $('game-chat-input');
+function sendChatFrom(input) {
   if (!input) return;
   const text = input.value.trim();
   if (!text) return;
@@ -1094,9 +1080,18 @@ function sendChat() {
   input.value = '';
 }
 
-$('game-chat-send').addEventListener('click', sendChat);
-$('game-chat-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); sendChat(); }
+// Event delegation for all chat inputs and send buttons
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('chat-send-btn')) {
+    const row = e.target.closest('.chat-input-row');
+    if (row) sendChatFrom(row.querySelector('.chat-input-field'));
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.classList.contains('chat-input-field')) {
+    e.preventDefault();
+    sendChatFrom(e.target);
+  }
 });
 
 const SPECTATOR_COLORS = ['#06b6d4','#f97316','#a3e635','#f43f5e','#a855f7','#facc15'];
@@ -1337,16 +1332,8 @@ function renderPlay(s) {
     trickArea.appendChild(wrapper);
   }
 
-  // Sets display (only Last Trick button — per-player sets shown on seat labels)
-  const setsDiv = $('sets-display');
-  setsDiv.innerHTML = '';
-  if (s.lastTrick && !s.trickComplete) {
-    const ltBtn = document.createElement('button');
-    ltBtn.className = 'btn-last-trick';
-    ltBtn.textContent = 'Last Trick';
-    ltBtn.addEventListener('click', showLastTrick);
-    setsDiv.appendChild(ltBtn);
-  }
+  // Last trick mini panel (bottom-right of table)
+  renderLastTrickPanel(s);
 
   // Hand
   const isMyTurn = !s.isSpectator && s.turn === s.mySeat;
