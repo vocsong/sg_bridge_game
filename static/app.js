@@ -25,7 +25,9 @@ const hashInfo = parseHash();
 // Prefer playerId from URL (cross-browser handoff), then localStorage, then generate new
 let playerId = hashInfo.pid || localStorage.getItem('playerId');
 if (!playerId) {
-  playerId = crypto.randomUUID();
+  // On localhost, prefix with tg_ to bypass the Telegram auth check on the server
+  const prefix = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? 'tg_dev_' : '';
+  playerId = prefix + crypto.randomUUID();
 }
 localStorage.setItem('playerId', playerId);
 
@@ -1142,11 +1144,39 @@ function renderBidding(s) {
 
   const histEl = $('bid-history');
   if (histEl && s.bidHistory && s.bidHistory.length > 0) {
-    histEl.innerHTML = s.bidHistory.slice().reverse().map(e =>
-      e.bidNum === null
-        ? `<div class="bid-hist-row bid-hist-pass"><span class="bid-hist-name">${esc(e.name)}</span><span class="bid-hist-dash"> - </span><span class="bid-hist-val">Pass</span></div>`
-        : `<div class="bid-hist-row"><span class="bid-hist-name">${esc(e.name)}</span><span class="bid-hist-dash"> - </span><span class="bid-hist-val">${getBidFromNum(e.bidNum)}</span></div>`
-    ).join('');
+    const firstBidderName = s.bidHistory[0].name;
+    const startIdx = s.players.findIndex(p => p.name === firstBidderName);
+    const cols = [];
+    for (let i = 0; i < 4; i++) {
+      cols.push(s.players[(startIdx + i) % s.players.length]);
+    }
+
+    let html = '<table class="bid-table"><thead><tr>';
+    for (const p of cols) {
+      html += `<th>${esc(p.name)}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+
+    for (let i = 0; i < s.bidHistory.length; i += 4) {
+      html += '<tr>';
+      const rowEnd = Math.min(i + 4, s.bidHistory.length);
+      for (let j = i; j < rowEnd; j++) {
+        const entry = s.bidHistory[j];
+        if (entry.bidNum === null) {
+          html += `<td class="bt-pass">—</td>`;
+        } else {
+          const suitClass = getSuitClass(BID_SUITS[entry.bidNum % 5]);
+          const isCurrent = entry.bidNum === s.bid;
+          html += `<td class="bt-bid ${suitClass}${isCurrent ? ' bt-current' : ''}">${getBidFromNum(entry.bidNum)}</td>`;
+        }
+      }
+      for (let k = rowEnd; k < i + 4; k++) html += '<td></td>';
+      html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    histEl.innerHTML = html;
+    histEl.scrollTop = histEl.scrollHeight;
   } else if (histEl) {
     histEl.innerHTML = '';
   }
@@ -1811,8 +1841,12 @@ document.getElementById('btn-guest').addEventListener('click', () => {
   showGameSection(null);
 });
 
-// Kick off auth check on page load
-initAuth();
+// On localhost, skip Telegram auth and go straight to guest mode
+if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+  showGameSection(null);
+} else {
+  initAuth();
+}
 loadLeaderboard();
 
 $('btn-create').addEventListener('click', async () => {
