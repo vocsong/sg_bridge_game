@@ -25,7 +25,9 @@ const hashInfo = parseHash();
 // Prefer playerId from URL (cross-browser handoff), then localStorage, then generate new
 let playerId = hashInfo.pid || localStorage.getItem('playerId');
 if (!playerId) {
-  playerId = crypto.randomUUID();
+  // On localhost, prefix with tg_ to bypass the Telegram auth check on the server
+  const prefix = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? 'tg_dev_' : '';
+  playerId = prefix + crypto.randomUUID();
 }
 localStorage.setItem('playerId', playerId);
 
@@ -1151,7 +1153,7 @@ function renderBidding(s) {
 
     let html = '<table class="bid-table"><thead><tr>';
     for (const p of cols) {
-      html += `<th>${esc(p.name.split(' ')[0])}</th>`;
+      html += `<th>${esc(p.name)}</th>`;
     }
     html += '</tr></thead><tbody>';
 
@@ -1827,8 +1829,12 @@ document.getElementById('btn-guest').addEventListener('click', () => {
   showGameSection(null);
 });
 
-// Kick off auth check on page load
-initAuth();
+// On localhost, skip Telegram auth and go straight to guest mode
+if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+  showGameSection(null);
+} else {
+  initAuth();
+}
 loadLeaderboard();
 
 $('btn-create').addEventListener('click', async () => {
