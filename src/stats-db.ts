@@ -49,18 +49,20 @@ export async function recordGameStats(
   const bidderTricksWon = bidderTeam.reduce((sum, s) => sum + (sets[s] ?? 0), 0);
   const oppTricksWon = oppTeam.reduce((sum, s) => sum + (sets[s] ?? 0), 0);
 
-  // seat → telegram_id lookup (null for guests)
+  // seat → telegram_id lookup (null for guests); use originalPlayerId for bot-replaced seats
   const seatToTgId: Record<number, number | null> = {};
   for (const p of players) {
-    seatToTgId[p.seat] = p.id.startsWith('tg_') ? Number(p.id.slice(3)) : null;
+    const effectiveId = p.originalPlayerId || p.id;
+    seatToTgId[p.seat] = effectiveId.startsWith('tg_') ? Number(effectiveId.slice(3)) : null;
   }
 
   const playedAt = Math.floor(Date.now() / 1000);
 
   const stmts = players
-    .filter((p) => p.id.startsWith('tg_'))
+    .filter((p) => (p.originalPlayerId || p.id).startsWith('tg_'))
     .map((player) => {
-      const telegramId = Number(player.id.slice(3));
+      const effectiveId = player.originalPlayerId || player.id;
+      const telegramId = Number(effectiveId.slice(3));
       const { seat } = player;
       const won = winnerSeats.includes(seat) ? 1 : 0;
       const tricksWon = bidderTeam.includes(seat) ? bidderTricksWon : oppTricksWon;
@@ -224,10 +226,11 @@ export async function recordEloUpdate(
   partnerSeat: number,
   winnerSeats: number[],
 ): Promise<EloResult[]> {
-  const authPlayers = players.filter((p) => p.id.startsWith('tg_'));
+  // Use originalPlayerId for bot-replaced seats so the original human's Elo is updated
+  const authPlayers = players.filter((p) => (p.originalPlayerId || p.id).startsWith('tg_'));
   if (authPlayers.length < 2) return [];
 
-  const telegramIds = authPlayers.map((p) => Number(p.id.slice(3)));
+  const telegramIds = authPlayers.map((p) => Number((p.originalPlayerId || p.id).slice(3)));
   const placeholders = telegramIds.map(() => '?').join(',');
   const userRows = await db
     .prepare(`SELECT telegram_id, elo, games_played FROM users WHERE telegram_id IN (${placeholders})`)
@@ -240,7 +243,7 @@ export async function recordEloUpdate(
 
   const seatToPlayer = new Map<number, EloPlayer>();
   for (const p of authPlayers) {
-    const tgId = Number(p.id.slice(3));
+    const tgId = Number((p.originalPlayerId || p.id).slice(3));
     const row = userMap.get(tgId);
     if (row) seatToPlayer.set(p.seat, { telegramId: tgId, elo: row.elo, gamesPlayed: row.games_played });
   }
@@ -264,7 +267,7 @@ export async function recordEloUpdate(
   const stmts = allPlayers.flatMap((player) => {
     const delta = deltas.get(player.telegramId) ?? 0;
     const newElo = player.elo + delta;
-    const p = players.find((pl) => pl.id === `tg_${player.telegramId}`);
+    const p = players.find((pl) => (pl.originalPlayerId || pl.id) === `tg_${player.telegramId}`);
     if (p) results.push({ seat: p.seat, name: p.name, delta, eloAfter: newElo });
     return [
       db
