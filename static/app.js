@@ -2262,7 +2262,9 @@ $('btn-play-again').addEventListener('click', () => {
 });
 
 $('btn-leave-global').addEventListener('click', () => {
-  if (gameState && gameState.phase !== 'lobby') {
+  if (gameState && (gameState.phase === 'bidding' || gameState.phase === 'play')) {
+    if (confirm('Leave the current game? A bot will take over after 3 minutes if you do not reconnect.')) leaveGame();
+  } else if (gameState && gameState.phase !== 'lobby') {
     if (confirm('Leave the current game?')) leaveGame();
   } else {
     leaveGame();
