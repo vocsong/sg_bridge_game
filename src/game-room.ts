@@ -377,6 +377,7 @@ export class GameRoom extends DurableObject {
       origin,
       pingCooldowns: {},
       disconnectTimers: {},
+      isPractice: false,
     };
   }
 
@@ -457,7 +458,7 @@ export class GameRoom extends DurableObject {
       trickLog: state.phase === 'gameover' && state.trickLog.length > 0 ? state.trickLog : null,
       trickWinners: state.phase === 'gameover' && state.trickWinners.length > 0 ? state.trickWinners : null,
       gameId: state.gameId,
-      isPractice: state.players.filter((p) => p.isBot).length >= 2,
+      isPractice: state.isPractice,
     };
     return { type: 'state', state: view };
   }
@@ -748,6 +749,12 @@ export class GameRoom extends DurableObject {
     state.phase = 'partner';
     state.turn = state.bidder;
 
+    // Invalidate any in-progress abandon vote when the phase changes (spec requirement)
+    if (state.abandonVote) {
+      state.abandonVote = undefined;
+      this.broadcast({ type: 'abandonVoteFailed', rejectSeat: -1, rejectName: 'Phase changed' });
+    }
+
     this.broadcast({
       type: 'bidWon',
       seat: state.bidder,
@@ -781,6 +788,12 @@ export class GameRoom extends DurableObject {
     const cardParts = card.split(' ');
     if (cardParts.length !== 2) return;
     const [cardValue, cardSuit] = cardParts;
+
+    // Invalidate any in-progress abandon vote when the phase changes (spec requirement)
+    if (state.abandonVote) {
+      state.abandonVote = undefined;
+      this.broadcast({ type: 'abandonVoteFailed', rejectSeat: -1, rejectName: 'Phase changed' });
+    }
 
     state.partnerCard = card;
     state.partner = -1;
@@ -933,7 +946,7 @@ export class GameRoom extends DurableObject {
         trickCards: [...state.lastTrick.cards],
       });
 
-      const isPracticeGame = state.players.filter((p) => p.isBot).length >= 2;
+      const isPracticeGame = state.isPractice; // snapshotted at deal start — not recomputed mid-game
 
       if (bidderSets >= state.setsNeeded) {
         state.phase = 'gameover';
@@ -2551,6 +2564,7 @@ export class GameRoom extends DurableObject {
     state.bidHistory = [];
     state.trickLog = [];
     state.trickWinners = [];
+    state.isPractice = state.players.filter((p) => p.isBot).length >= 2; // snapshot at deal start
     state.initialHands = state.hands.map((h) => ({
       '♣': [...h['♣']],
       '♦': [...h['♦']],

@@ -83,6 +83,7 @@ export interface GameState {
   origin: string | null;
   pingCooldowns: { [seat: number]: number }; // timestamp of last ping per recipient seat
   disconnectTimers: { [seat: number]: number }; // timestamp when player disconnected (0 if connected)
+  isPractice: boolean; // snapshotted at deal start; not recomputed mid-game when bots replace humans
   abandonVote?: {
     initiatorSeat: number;
     initiatorId: string;
