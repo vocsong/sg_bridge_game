@@ -944,7 +944,7 @@ function renderLobby(s) {
     const notRankedBadge = (s.groupId && p.isGroupMember === false && !p.isBot)
       ? '<span class="not-ranked-badge">⚠️ not ranked</span>'
       : '';
-    const kickBtn = (!s.isSpectator && s.phase === 'lobby' && p.seat !== s.mySeat && (!p.isBot || isHost))
+    const kickBtn = (!s.isSpectator && (s.phase === 'lobby' || s.phase === 'gameover') && p.seat !== s.mySeat && !p.isBot)
       ? `<button class="kick-btn" onclick="send({type:'kickPlayer',seat:${p.seat}})">✕</button>`
       : '';
     item.innerHTML = `<span class="seat-num">${p.seat + 1}</span>${statusDot(p.connected)}${botIcon}<span class="lobby-player-name">${esc(p.name)}</span>${statsHtml}${notRankedBadge}${kickBtn}`;
@@ -1908,7 +1908,12 @@ $('btn-play-again').addEventListener('click', () => {
 });
 
 $('btn-leave-global').addEventListener('click', () => {
-  if (gameState && gameState.phase !== 'lobby') {
+  if (gameState && gameState.isSpectator) {
+    if (confirm('Stop spectating and return to home?')) {
+      try { ws && ws.send(JSON.stringify({ type: 'leaveSpectator' })); } catch { /* ignore */ }
+      leaveGame();
+    }
+  } else if (gameState && gameState.phase !== 'lobby') {
     if (confirm('Leave the current game?')) leaveGame();
   } else {
     leaveGame();

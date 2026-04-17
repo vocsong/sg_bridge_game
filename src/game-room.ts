@@ -146,6 +146,9 @@ export class GameRoom extends DurableObject {
       case 'leave':
         await this.handleLeave(state, session.playerId);
         break;
+      case 'leaveSpectator':
+        await this.handleLeaveSpectator(state, session.playerId, ws);
+        break;
       case 'watchSeat':
         await this.handleWatchSeat(state, session.playerId, msg.seat, ws);
         break;
@@ -987,13 +990,16 @@ export class GameRoom extends DurableObject {
 
     state.readySeats = [...state.readySeats, player.seat];
 
-    if (state.readySeats.length < NUM_PLAYERS) {
+    if (state.readySeats.length < state.players.length) {
       await this.saveState(state);
       this.broadcastFullState(state);
       return;
     }
 
-    // All players ready — transition to lobby with countdown
+    await this.handlePlayAgainTransition(state);
+  }
+
+  private async handlePlayAgainTransition(state: GameState): Promise<void> {
     state.readySeats = [];
     state.phase = 'lobby';
     state.gameStartAt = Date.now() + 5000;
@@ -2474,7 +2480,7 @@ export class GameRoom extends DurableObject {
   }
 
   private async handleKickPlayer(state: GameState, requestorId: string, targetSeat: number): Promise<void> {
-    if (state.phase !== 'lobby') return;
+    if (state.phase !== 'lobby' && state.phase !== 'gameover') return;
     const requestor = state.players.find((p) => p.id === requestorId);
     if (!requestor || !requestor.connected) return;
     if (requestor.seat === targetSeat) return; // can't kick yourself
@@ -2500,6 +2506,15 @@ export class GameRoom extends DurableObject {
     state.players = state.players.filter((p) => p.seat !== targetSeat);
     state.players.forEach((p, i) => { p.seat = i; });
 
+    // Remove from readySeats and remap to new seat indices
+    if (state.phase === 'gameover') {
+      // Rebuild readySeats: keep seats that were ready, mapped through the new seat order
+      // A seat > kickedSeat shifts down by 1; kickedSeat itself is gone
+      state.readySeats = state.readySeats
+        .filter((s) => s !== kickedSeat)
+        .map((s) => (s > kickedSeat ? s - 1 : s));
+    }
+
     // Cancel countdown if active
     if (state.gameStartAt !== null) {
       state.gameStartAt = null;
@@ -2509,6 +2524,11 @@ export class GameRoom extends DurableObject {
     this.broadcast({ type: 'playerKicked', seat: kickedSeat, name: kickedName });
     await this.saveState(state);
     this.broadcastFullState(state);
+
+    // If in gameover and remaining ready players now fill the room, transition to lobby
+    if (state.phase === 'gameover' && state.readySeats.length >= state.players.length && state.players.length > 0) {
+      await this.handlePlayAgainTransition(state);
+    }
   }
 
   private async handleLeave(state: GameState, playerId: string): Promise<void> {
@@ -2538,6 +2558,31 @@ export class GameRoom extends DurableObject {
     this.broadcast({ type: 'playerKicked', seat: leaverSeat, name: leaverName });
     await this.saveState(state);
     this.broadcastFullState(state);
+  }
+
+  private async handleLeaveSpectator(state: GameState, playerId: string, ws: WebSocket): Promise<void> {
+    const idx = state.spectators.findIndex((s) => s.id === playerId);
+    if (idx === -1) return;
+
+    const spectator = state.spectators[idx];
+
+    if (state.phase === 'lobby' && state.players.length < NUM_PLAYERS) {
+      // Promote spectator to player
+      state.spectators.splice(idx, 1);
+      const seat = state.players.length;
+      const newPlayer = { id: playerId, name: spectator.name, seat, connected: true } as import('./types').Player;
+      await this.refreshPlayerStats(newPlayer, playerId);
+      state.players.push(newPlayer);
+      await this.saveState(state);
+      this.broadcastFullState(state);
+    } else {
+      // Remove spectator and close their connection
+      state.spectators.splice(idx, 1);
+      this.sessions.delete(ws);
+      await this.saveState(state);
+      this.broadcastFullState(state);
+      try { ws.close(1000, 'left spectator mode'); } catch { /* already closed */ }
+    }
   }
 
   private handleChat(state: GameState, playerId: string, text: string): void {
