@@ -212,7 +212,7 @@ export class GameRoom extends DurableObject {
       // Track disconnect time only during active game phases
       if (state.phase === 'bidding' || state.phase === 'partner' || state.phase === 'play') {
         state.disconnectTimers[player.seat] = Date.now();
-        const botAlarmAt = Date.now() + 180000;
+        const botAlarmAt = Date.now() + 90000;
         const existingAlarm = await this.ctx.storage.getAlarm();
         if (!existingAlarm || existingAlarm > botAlarmAt) {
           await this.ctx.storage.setAlarm(botAlarmAt);
@@ -259,7 +259,7 @@ export class GameRoom extends DurableObject {
     // Bot replacement alarm — check if any disconnected players need bot takeover
     if (state.phase === 'bidding' || state.phase === 'partner' || state.phase === 'play') {
       const now = Date.now();
-      const botReplacementThreshold = 180000; // 3 minutes in milliseconds
+      const botReplacementThreshold = 90000; // 90 seconds in milliseconds
       let needsSave = false;
 
       for (const [seatStr, disconnectTime] of Object.entries(state.disconnectTimers)) {
@@ -270,7 +270,7 @@ export class GameRoom extends DurableObject {
         if (player.isBot) continue; // Already a bot
         if (player.connected) continue; // Reconnected
 
-        // Check if 3 minutes have passed since disconnect
+        // Check if 90 seconds have passed since disconnect
         if (now - disconnectTime >= botReplacementThreshold) {
           // Replace with sophisticated bot
           const originalPlayerId = player.id;
@@ -279,7 +279,7 @@ export class GameRoom extends DurableObject {
           player.botLevel = 'sophisticated';
           player.originalPlayerId = originalPlayerId;
           delete state.disconnectTimers[seat];
-          this.broadcast({ type: 'chat', name: 'System', seat: -1, text: `${player.name} was disconnected for 3 minutes and has been replaced by a bot.` });
+          this.broadcast({ type: 'chat', name: 'System', seat: -1, text: `${player.name} was away for 90 seconds and has been replaced by a bot.` });
           needsSave = true;
         }
       }
@@ -334,7 +334,7 @@ export class GameRoom extends DurableObject {
       // After handling the vote, re-schedule alarm for any pending bot-replacement timers
       const pendingTimers = Object.values(state.disconnectTimers);
       if (pendingTimers.length > 0 && (state.phase === 'bidding' || state.phase === 'partner' || state.phase === 'play')) {
-        const nextAlarmAt = Math.min(...pendingTimers) + 180000;
+        const nextAlarmAt = Math.min(...pendingTimers) + 90000;
         await this.ctx.storage.setAlarm(nextAlarmAt);
         return;
       }
@@ -429,6 +429,7 @@ export class GameRoom extends DurableObject {
         isGroupMember: p.isGroupMember,
         elo: p.elo,
         telegramId: p.id.startsWith('tg_') ? Number(p.id.slice(3)) : undefined,
+        disconnectedAt: state.disconnectTimers[p.seat],
       })),
       hand: !isFullBoard && mySeat >= 0 && state.hands.length > 0 ? state.hands[mySeat] : null,
       allHands: isFullBoard && state.hands.length > 0 ? state.hands : null,

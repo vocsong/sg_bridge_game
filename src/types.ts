@@ -95,7 +95,7 @@ export interface GameState {
 export interface PlayerGameView {
   roomCode: string;
   phase: GamePhase;
-  players: { name: string; seat: number; connected: boolean; wins?: number; gamesPlayed?: number; isBot?: boolean; botLevel?: 'basic' | 'intermediate' | 'advanced' | 'sophisticated'; isGroupMember?: boolean; elo?: number; telegramId?: number }[];
+  players: { name: string; seat: number; connected: boolean; wins?: number; gamesPlayed?: number; isBot?: boolean; botLevel?: 'basic' | 'intermediate' | 'advanced' | 'sophisticated'; isGroupMember?: boolean; elo?: number; telegramId?: number; disconnectedAt?: number }[];
   hand: Hand | null;
   allHands: Hand[] | null; // all 4 hands, only for full-board spectators (watchingSeat === -2)
   turn: number;

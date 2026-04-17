@@ -42,6 +42,7 @@ let lastGameOver = null;
 let prevTurn = -1;
 let lobbyCountdownTimer = null;
 let gameoverCountdownTimer = null;
+let disconnectCountdownTimer = null;
 
 // Stats state
 let statsData = { players: [], pairs: [], betting: null };
@@ -526,6 +527,7 @@ function showGameSection(name) {
 
 // --- Screen management ---
 function showScreen(id) {
+  if (id !== 'screen-bidding' && id !== 'screen-play') stopDisconnectCountdown();
   screens.forEach((s) => s.classList.remove('active'));
   screens.forEach((s) => s.classList.add('hidden'));
   const el = $(id);
@@ -1443,6 +1445,28 @@ function renderSpectatorBar(s) {
   }).join('');
 }
 
+const BOT_TAKEOVER_MS = 90000;
+
+function disconnectCountdownText(disconnectedAt) {
+  if (!disconnectedAt) return '';
+  const elapsed = Math.floor((Date.now() - disconnectedAt) / 1000);
+  const remaining = Math.max(0, Math.ceil((BOT_TAKEOVER_MS - (Date.now() - disconnectedAt)) / 1000));
+  return ` (away ${elapsed}s, bot in ${remaining}s)`;
+}
+
+function startDisconnectCountdown(renderFn) {
+  clearInterval(disconnectCountdownTimer);
+  disconnectCountdownTimer = setInterval(() => {
+    if (gameState) renderFn(gameState);
+    else clearInterval(disconnectCountdownTimer);
+  }, 1000);
+}
+
+function stopDisconnectCountdown() {
+  clearInterval(disconnectCountdownTimer);
+  disconnectCountdownTimer = null;
+}
+
 // --- Bidding ---
 function renderBidding(s) {
   renderPlayerStatusBar($('bidding-players'), s.players, true);
@@ -1455,12 +1479,21 @@ function renderBidding(s) {
 
   if (isFullBoard) {
     $('bid-status').textContent = '👁 Viewing all hands';
+    stopDisconnectCountdown();
   } else {
-    $('bid-status').textContent = s.isSpectator
-      ? `👁 Watching: ${s.players[s.watchingSeat]?.name || '?'}`
-      : isMyTurn
-        ? "It's your turn to bid!"
-        : `Waiting for ${s.players[s.turn]?.name || '?'} to bid...`;
+    const turnPlayer = s.players[s.turn];
+    const turnDisconnected = turnPlayer && !turnPlayer.connected && turnPlayer.disconnectedAt;
+    if (turnDisconnected) {
+      $('bid-status').textContent = `Waiting for ${turnPlayer.name} to reconnect...${disconnectCountdownText(turnPlayer.disconnectedAt)}`;
+      startDisconnectCountdown(renderBidding);
+    } else {
+      stopDisconnectCountdown();
+      $('bid-status').textContent = s.isSpectator
+        ? `👁 Watching: ${s.players[s.watchingSeat]?.name || '?'}`
+        : isMyTurn
+          ? "It's your turn to bid!"
+          : `Waiting for ${turnPlayer?.name || '?'} to bid...`;
+    }
   }
 
   if (s.bid >= 0 && s.bidder >= 0) {
@@ -1697,7 +1730,10 @@ function renderPlay(s) {
           : '')
         .join('');
       const sets = s.sets?.[seat] ?? 0;
-      label.innerHTML = `<span class="seat-name-row">${bidderStar}${partnerStar}${statusDot(player.connected)}<span class="seat-name">${esc(player.name)}</span>${eyeIcons}</span><span class="seat-sets">${sets}</span>`;
+      const countdownStr = (seat === s.turn && !player.connected && player.disconnectedAt)
+        ? `<span class="disconnect-countdown">${disconnectCountdownText(player.disconnectedAt)}</span>`
+        : '';
+      label.innerHTML = `<span class="seat-name-row">${bidderStar}${partnerStar}${statusDot(player.connected)}<span class="seat-name">${esc(player.name)}</span>${eyeIcons}</span><span class="seat-sets">${sets}</span>${countdownStr}`;
       label.className = 'seat-label';
       if (seat === s.turn) {
         label.classList.add('active-turn');
@@ -1707,6 +1743,14 @@ function renderPlay(s) {
     } else {
       label.textContent = '';
     }
+  }
+
+  // Start/stop live disconnect countdown for the turn player
+  const turnPlayer = s.players[s.turn];
+  if (turnPlayer && !turnPlayer.connected && turnPlayer.disconnectedAt) {
+    startDisconnectCountdown(renderPlay);
+  } else {
+    stopDisconnectCountdown();
   }
 
   // Trick area
