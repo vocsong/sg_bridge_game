@@ -743,6 +743,7 @@ body.has-spectators .screen {
   box-shadow: 0 0 0 2px var(--accent), 0 0 20px rgba(108,92,231,0.7), 0 0 40px rgba(108,92,231,0.3);
 }
 .seat-label.disconnected { opacity: 0.5; }
+.disconnect-countdown { font-size: 0.65em; color: #f87171; display: block; white-space: nowrap; }
 .seat-name-row {
   display: flex; align-items: center; gap: 4px;
   max-width: 90px;
