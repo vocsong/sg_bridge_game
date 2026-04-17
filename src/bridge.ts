@@ -4,6 +4,9 @@ import { shuffle } from './random';
 const DECK_SIZE = 52;
 const HAND_SIZE = 13;
 
+const VALUE_MAP: Record<number, string> = { 14: 'A', 13: 'K', 12: 'Q', 11: 'J' };
+const INV_VALUE_MAP: Record<string, number> = { 'A': 14, 'K': 13, 'Q': 12, 'J': 11 };
+
 interface Card {
   value: string;
   suit: Suit;
@@ -21,19 +24,11 @@ const DECK_OF_52: Card[] = (() => {
 })();
 
 export function getValueFromNum(num: number): string {
-  if (num === 14) return 'A';
-  if (num === 13) return 'K';
-  if (num === 12) return 'Q';
-  if (num === 11) return 'J';
-  return String(num);
+  return VALUE_MAP[num] ?? String(num);
 }
 
 export function getNumFromValue(val: string): number {
-  if (val === 'A') return 14;
-  if (val === 'K') return 13;
-  if (val === 'Q') return 12;
-  if (val === 'J') return 11;
-  return parseInt(val, 10);
+  return INV_VALUE_MAP[val] ?? parseInt(val, 10);
 }
 
 export function getBidFromNum(num: number): string {
