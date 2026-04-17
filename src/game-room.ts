@@ -199,8 +199,8 @@ export class GameRoom extends DurableObject {
     const player = state.players.find((p) => p.id === session.playerId);
     if (player) {
       player.connected = false;
-      // Track disconnect time only during bidding or play
-      if (state.phase === 'bidding' || state.phase === 'play') {
+      // Track disconnect time only during active game phases
+      if (state.phase === 'bidding' || state.phase === 'partner' || state.phase === 'play') {
         state.disconnectTimers[player.seat] = Date.now();
         // Set alarm for bot replacement only if no sooner alarm is already scheduled
         const botAlarmAt = Date.now() + 180000;
@@ -253,7 +253,7 @@ export class GameRoom extends DurableObject {
     }
 
     // Bot replacement alarm — check if any disconnected players need bot takeover
-    if (state.phase === 'bidding' || state.phase === 'play') {
+    if (state.phase === 'bidding' || state.phase === 'partner' || state.phase === 'play') {
       const now = Date.now();
       const botReplacementThreshold = 180000; // 3 minutes in milliseconds
       let needsSave = false;
@@ -274,7 +274,8 @@ export class GameRoom extends DurableObject {
           player.isBot = true;
           player.botLevel = 'sophisticated';
           player.originalPlayerId = originalPlayerId;
-          delete state.disconnectTimers[seat]; // Clean up timer
+          delete state.disconnectTimers[seat];
+          this.broadcast({ type: 'chat', name: 'System', seat: -1, text: `${player.name} was disconnected for 3 minutes and has been replaced by a bot.` });
           needsSave = true;
         }
       }
@@ -328,7 +329,7 @@ export class GameRoom extends DurableObject {
 
       // After handling the vote, re-schedule alarm for any pending bot-replacement timers
       const pendingTimers = Object.values(state.disconnectTimers);
-      if (pendingTimers.length > 0 && (state.phase === 'bidding' || state.phase === 'play')) {
+      if (pendingTimers.length > 0 && (state.phase === 'bidding' || state.phase === 'partner' || state.phase === 'play')) {
         const nextAlarmAt = Math.min(...pendingTimers) + 180000;
         await this.ctx.storage.setAlarm(nextAlarmAt);
         return;
@@ -566,7 +567,7 @@ export class GameRoom extends DurableObject {
 
     // Check if a bot is currently replacing this player (they're rejoining mid-game)
     const botReplacement = state.players.find((p) => p.originalPlayerId === playerId);
-    if (botReplacement && (state.phase === 'bidding' || state.phase === 'play')) {
+    if (botReplacement && (state.phase === 'bidding' || state.phase === 'partner' || state.phase === 'play')) {
       // Player rejoins and takes over from bot — update bot's originalPlayerId and mark as not-bot
       botReplacement.id = playerId;
       botReplacement.isBot = false;
