@@ -138,6 +138,7 @@ export interface Env {
   JWT_SECRET: string;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_BOT_USERNAME: string;
+  ALLOW_DEV_LOGIN?: string;
 }
 
 export const NUM_PLAYERS = 4;

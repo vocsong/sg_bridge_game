@@ -6,6 +6,11 @@ function handToCards(hand: Hand): string[] {
   return CARD_SUITS.flatMap((suit) => hand[suit].map((v) => `${v} ${suit}`));
 }
 
+function telegramIdFor(p: Player): number | null {
+  const id = p.originalPlayerId || p.id;
+  return id.startsWith('tg_') ? Number(id.slice(3)) : null;
+}
+
 export async function insertGameHands(
   db: D1Database,
   gameId: string,
@@ -15,9 +20,9 @@ export async function insertGameHands(
   const now = Math.floor(Date.now() / 1000);
   const stmts = players.map((p) =>
     db.prepare(
-      `INSERT INTO game_hands (game_id, seat, player_name, initial_hand, played_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).bind(gameId, p.seat, p.name, JSON.stringify(handToCards(hands[p.seat])), now),
+      `INSERT INTO game_hands (game_id, seat, player_name, telegram_id, initial_hand, played_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(gameId, p.seat, p.name, telegramIdFor(p), JSON.stringify(handToCards(hands[p.seat])), now),
   );
   await db.batch(stmts);
 }
@@ -62,6 +67,7 @@ export async function insertGameMetadata(
   players: Player[],
   sets: number[],
   winningTeam: 'bidder' | 'opponents',
+  isPractice: boolean,
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const seatMap = players.map((p) => ({ seat: p.seat, name: p.name }));
@@ -69,8 +75,8 @@ export async function insertGameMetadata(
     .prepare(
       `INSERT INTO game_metadata
          (game_id, bidder_seat, bid_num, trump_suit, partner_card,
-          bid_history, seat_map, tricks_won, winning_team, played_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          bid_history, seat_map, tricks_won, winning_team, played_at, is_practice)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       gameId,
@@ -83,6 +89,7 @@ export async function insertGameMetadata(
       JSON.stringify(sets),
       winningTeam,
       now,
+      isPractice ? 1 : 0,
     )
     .run();
 }

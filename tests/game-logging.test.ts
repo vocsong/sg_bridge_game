@@ -59,9 +59,13 @@ describe('insertGameHands', () => {
     expect(db._calls[0].args[0]).toBe('game-1');
     expect(db._calls[0].args[1]).toBe(0); // seat
     expect(db._calls[0].args[2]).toBe('Alice'); // name
-    const hand0 = JSON.parse(db._calls[0].args[3] as string) as string[];
+    expect(db._calls[0].args[3]).toBe(1); // telegram_id (from tg_1)
+    const hand0 = JSON.parse(db._calls[0].args[4] as string) as string[];
     expect(hand0).toContain('A ♣');
     expect(hand0).toContain('K ♦');
+    // Guest (non-tg_) and bot should have null telegram_id
+    expect(db._calls[2].args[3]).toBe(null); // Bot A
+    expect(db._calls[3].args[3]).toBe(null); // Carol (guest)
   });
 });
 

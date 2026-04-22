@@ -24,11 +24,14 @@ npm run test      # Run vitest
 
 ### Backend (Cloudflare Workers + Durable Objects)
 
-- **`src/index.ts`** — Worker entry point. Routes `POST /api/create` (generates room code, provisions DO) and `/api/ws` (upgrades to WebSocket, delegates to DO).
+- **`src/index.ts`** — Worker entry point. Routes `POST /api/create` (generates room code, provisions DO), `/api/ws` (upgrades to WebSocket), `/api/games/mine` + `/api/games/:gameId` (history + replay), and dev-only `/api/auth/dev`.
 - **`src/game-room.ts`** — The Durable Object. One instance per room. Holds the full `GameState` in DO storage, manages the WebSocket connections for all 4 players, and runs the entire game state machine (lobby → bidding → partner selection → play → game over).
 - **`src/bridge.ts`** — Pure game logic: deck shuffling, hand generation (with wash/redeal rule for weak hands), point calculation, valid card determination, trick winner comparison.
 - **`src/types.ts`** — `GameState`, `PlayerGameView`, `Player`, `Hand`, `TrickRecord` interfaces; constants (`NUM_PLAYERS=4`, `MAX_BID=34`).
 - **`src/protocol.ts`** — Union types for all WebSocket messages (client→server and server→client).
+- **`src/history.ts`** — Per-user game list + full replay payload (D1 queries, server-side trick-winner computation, rating injection).
+- **`src/move-rating.ts`** — Heuristic move rating engine (`rateGame`, `summarize`); labels each played card as best/good/inaccuracy/mistake/blunder.
+- **`src/game-logging.ts`** — Writes `game_hands` (with per-seat `telegram_id`), `game_tricks`, and `game_metadata` (with `is_practice`). Runs for **all** games, including practice.
 
 ### Frontend (Vanilla JS SPA)
 
@@ -97,6 +100,47 @@ Bots live entirely server-side in `src/game-room.ts`. All bot methods are privat
 
 ### Bid history as suit signal
 `state.bidHistory` entries where `bidNum !== null` indicate the bidder/partner likely holds more of that suit.
+
+## Game History & Replay
+
+Completed games (practice *and* rated) are replayable from the home screen via **Match History**.
+
+### Storage split
+- **`game_hands`** — one row per (game_id, seat) with `telegram_id` (nullable for bots/guests), `initial_hand`, `final_hand`. This is the **participation index** — history queries find a user's games here.
+- **`game_metadata`** — one row per game. Holds `bidder_seat`, `bid_num`, `trump_suit`, `partner_card`, `bid_history`, `seat_map`, `tricks_won`, `winning_team`, `is_practice`.
+- **`game_tricks`** — one row per card played, keyed by `(game_id, trick_num, play_order)`.
+- **`game_records`** — rated games only. Source of truth for leaderboard / ELO / head-to-head. **Practice games are deliberately excluded from this table** so they don't pollute stats.
+
+### Key invariant
+`game_hands` / `game_metadata` / `game_tricks` are written for **every** completed game (see the `waitUntil` block in `game-room.ts` after each win path). `game_records` / `recordGameStats` / `recordEloUpdate` are gated by `!isPracticeGame`.
+
+### Replay authorization
+`getGameReplay` checks the caller participated via `SELECT 1 FROM game_hands WHERE game_id = ? AND telegram_id = ?`. Do **not** switch this back to `game_records` — that would re-exclude practice games.
+
+### Move rating (`src/move-rating.ts`)
+Heuristic only (no DDS). Rates each played card:
+- **best (★)** — cheapest winning card, or winning-card-when-partner-ahead
+- **good (✓)** — reasonable play
+- **inaccuracy (?!)** — suboptimal but not catastrophic
+- **mistake (?)** — material error (e.g. wasted high card)
+- **blunder (??)** — trumping partner, overtaking partner's winner, leading trump before it's broken
+
+**Duo-aware knowledge model.** The engine derives `partnerSeat` from the initial hands (always known to the engine, not gated on the partner card being played). Per-play team identification goes through `perceivedTeam(observer, target)` which returns `'bidder' | 'opposition' | 'unknown'` from the observer's POV:
+- Partner (the seat holding the partner card) privately knows all teams from trick 1.
+- Bidder and opposition only fully know after the partner card is publicly played (`partnerCardPlayed`).
+- Pre-reveal, a non-partner observer sees non-bidder seats as `'unknown'` and falls back to "play for the trick".
+
+**Duo-vs-duo full-hand check.** `teammateCanWinTrick` looks across all four hands to see if the observer's *known* teammate, still to play in this trick, holds a guaranteed winner. If so, playing a loser is rated `'good'` ("Left the trick for partner") instead of `'mistake'`. Gated on the observer actually knowing their teammate (partner always; bidder/opposition only post-reveal).
+
+`rateGame` takes a `RateGameInput` (not the full `GameReplay` — avoids a circular type). The engine is swappable; a DDS-backed version can replace `rateGame` without changing callers.
+
+## Local Dev Login
+
+Telegram Login Widget doesn't work on `localhost`. For local testing there's a dev-only path:
+- `.dev.vars` sets `ALLOW_DEV_LOGIN=1` (file is gitignored; never commit)
+- `POST /api/auth/dev { displayName }` mints a JWT for a deterministic fake `telegram_id` (hashed from the name, so the same name always hits the same row)
+- The frontend shows a "Dev Login" box only when `location.hostname` is `localhost` / `127.0.0.1`
+- The endpoint is gated by `env.ALLOW_DEV_LOGIN === '1'`, so it's a no-op in production
 
 ## Legacy Code
 

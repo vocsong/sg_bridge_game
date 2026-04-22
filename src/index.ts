@@ -4,6 +4,7 @@ import { upsertUser, getUser, updateDisplayName, getLeaderboard, upsertGroup, ge
 import { sendMessage, parseUpdate } from './telegram';
 import { getPlayerStats, getPairStats } from './stats-db';
 import { placeBet, getUserBet, getBettingLeaderboard } from './betting-db';
+import { listUserGames, getGameReplay } from './history';
 
 export { GameRoom } from './game-room';
 
@@ -30,6 +31,21 @@ export default {
     // Public bot username for the Telegram Login Widget
     if (url.pathname === '/api/config' && request.method === 'GET') {
       return Response.json({ botUsername: env.TELEGRAM_BOT_USERNAME });
+    }
+
+    // DEV ONLY: mint a JWT for a fake user without Telegram verification.
+    // Gated by ALLOW_DEV_LOGIN env flag (set in .dev.vars for local dev).
+    if (url.pathname === '/api/auth/dev' && request.method === 'POST' && env.ALLOW_DEV_LOGIN === '1') {
+      const body = await request.json<{ displayName?: string }>().catch(() => ({} as { displayName?: string }));
+      const displayName = (body.displayName ?? '').trim() || 'Dev User';
+      // Deterministic fake telegram_id derived from name, so repeat logins hit the same row.
+      let hash = 0;
+      for (let i = 0; i < displayName.length; i++) hash = ((hash << 5) - hash + displayName.charCodeAt(i)) | 0;
+      const telegramId = 900_000_000 + Math.abs(hash) % 90_000_000;
+      await upsertUser(env.DB, telegramId, displayName);
+      const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
+      const token = await signJwt({ sub: String(telegramId), name: displayName, exp }, env.JWT_SECRET);
+      return Response.json({ token, displayName });
     }
 
     // Telegram Login Widget callback → verify, upsert user, return JWT
@@ -269,6 +285,33 @@ export default {
         groupName: r.group_name,
       }));
       return Response.json(groups);
+    }
+
+    // --- Game history / replay endpoints ---
+
+    // GET /api/games/mine?limit=20&before=<unix_ts>  (auth required)
+    if (url.pathname === '/api/games/mine' && request.method === 'GET') {
+      const claims = await getAuthClaims(request, env.JWT_SECRET);
+      if (!claims) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      const limitRaw = Number(url.searchParams.get('limit') ?? '20');
+      const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 20, 1), 100);
+      const beforeRaw = url.searchParams.get('before');
+      const before = beforeRaw && Number.isFinite(Number(beforeRaw)) ? Number(beforeRaw) : null;
+      const games = await listUserGames(env.DB, Number(claims.sub), limit, before);
+      return Response.json(games);
+    }
+
+    // GET /api/games/:gameId  (auth required; caller must have participated)
+    {
+      const match = url.pathname.match(/^\/api\/games\/([^/]+)$/);
+      if (match && request.method === 'GET') {
+        const claims = await getAuthClaims(request, env.JWT_SECRET);
+        if (!claims) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+        const gameId = decodeURIComponent(match[1]);
+        const replay = await getGameReplay(env.DB, gameId, Number(claims.sub));
+        if (!replay) return Response.json({ error: 'Not found' }, { status: 404 });
+        return Response.json(replay);
+      }
     }
 
     // --- Betting endpoints ---
