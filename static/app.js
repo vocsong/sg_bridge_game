@@ -141,6 +141,389 @@ async function renderGroupLeaderboard(groupId) {
   }
 }
 
+// --- Game history / replay ---
+
+let historyGames = [];
+let replayData = null;
+let replayTrickIdx = 0; // 0 = pre-play; 1..N = plays up to and including trick N
+
+function formatBidLabel(bidLevel, bidSuit) {
+  return `${bidLevel} ${bidSuit}`;
+}
+
+function ratingGlyph(rating) {
+  switch (rating) {
+    case 'best': return '★';
+    case 'good': return '✓';
+    case 'inaccuracy': return '?!';
+    case 'mistake': return '?';
+    case 'blunder': return '??';
+    default: return '';
+  }
+}
+
+function formatPlayedAt(unixSeconds) {
+  const d = new Date(unixSeconds * 1000);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const datePart = d.toLocaleDateString([], sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { year: 'numeric', month: 'short', day: 'numeric' });
+  const timePart = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${datePart}, ${timePart}`;
+}
+
+async function showMatchHistory() {
+  showScreen('screen-history');
+  const list = $('history-list');
+  const footer = $('history-footer');
+  list.innerHTML = '<p class="status-text">Loading...</p>';
+  footer.innerHTML = '';
+  if (!authToken) {
+    list.innerHTML = '<p class="status-text">Please log in to see your games.</p>';
+    return;
+  }
+  try {
+    const res = await fetch('/api/games/mine?limit=20', {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (!res.ok) {
+      list.innerHTML = '<p class="status-text">Could not load history.</p>';
+      return;
+    }
+    historyGames = await res.json();
+    renderHistoryList();
+  } catch {
+    list.innerHTML = '<p class="status-text">Network error.</p>';
+  }
+}
+
+function renderHistoryList() {
+  const list = $('history-list');
+  if (!historyGames || historyGames.length === 0) {
+    list.innerHTML = '<p class="status-text">No completed games yet.</p>';
+    return;
+  }
+  const rows = historyGames.map((g) => {
+    const trump = g.trumpSuit ?? g.bidSuit;
+    const bidderName = g.seatMap.find((s) => s.seat === g.bidderSeat)?.name ?? '?';
+    const othersLine = g.seatMap
+      .filter((s) => s.seat !== g.bidderSeat)
+      .map((s) => esc(s.name))
+      .join(', ');
+    const resultCls = g.won ? 'history-row-won' : 'history-row-lost';
+    const resultBadge = g.won ? 'Won' : 'Lost';
+    const roleLabel = g.role === 'bidder' ? 'You bid' : g.role === 'partner' ? 'Partner' : 'Opposition';
+    const practiceBadge = g.isPractice ? '<span class="history-practice">Practice</span>' : '';
+    return `
+      <div class="history-row ${resultCls}" data-gameid="${esc(g.gameId)}">
+        <div class="history-row-main">
+          <span class="history-bid">${formatBidLabel(g.bidLevel, trump)}</span>
+          <span class="history-role">${roleLabel}</span>
+          ${practiceBadge}
+          <span class="history-result">${resultBadge} · ${g.tricksWon}/${g.setsNeeded} tricks</span>
+        </div>
+        <div class="history-row-sub">
+          <span class="history-bidder">Bidder: ${esc(bidderName)}</span>
+          <span class="history-others">${othersLine}</span>
+          <span class="history-date">${formatPlayedAt(g.playedAt)}</span>
+        </div>
+      </div>`;
+  }).join('');
+  $('history-list').innerHTML = rows;
+  document.querySelectorAll('#history-list .history-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const id = row.getAttribute('data-gameid');
+      if (id) showReplay(id);
+    });
+  });
+  const footer = $('history-footer');
+  if (historyGames.length >= 20) {
+    footer.innerHTML = '<button id="history-load-more" class="btn btn-secondary btn-small">Load more</button>';
+    $('history-load-more').addEventListener('click', loadMoreHistory);
+  } else {
+    footer.innerHTML = '';
+  }
+}
+
+async function loadMoreHistory() {
+  if (!authToken || historyGames.length === 0) return;
+  const oldest = historyGames[historyGames.length - 1].playedAt;
+  try {
+    const res = await fetch(`/api/games/mine?limit=20&before=${oldest}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (!res.ok) return;
+    const more = await res.json();
+    historyGames = historyGames.concat(more);
+    renderHistoryList();
+  } catch { /* silent */ }
+}
+
+async function showReplay(gameId) {
+  showScreen('screen-replay');
+  $('replay-header').innerHTML = '<p class="status-text">Loading...</p>';
+  $('replay-hands').innerHTML = '';
+  $('replay-progress').textContent = '';
+  if (!authToken) return;
+  try {
+    const res = await fetch(`/api/games/${encodeURIComponent(gameId)}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (!res.ok) {
+      $('replay-header').innerHTML = '<p class="status-text">Could not load this game.</p>';
+      return;
+    }
+    replayData = await res.json();
+    replayTrickIdx = 0;
+    renderReplay();
+  } catch {
+    $('replay-header').innerHTML = '<p class="status-text">Network error.</p>';
+  }
+}
+
+const RATING_LABELS = [
+  ['best', 'best'],
+  ['good', 'good'],
+  ['inaccuracy', 'inaccuracy'],
+  ['mistake', 'mistake'],
+  ['blunder', 'blunder'],
+];
+
+function countRatingsBySeat(ratings, seats) {
+  const set = new Set(seats);
+  const counts = { best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+  for (const r of (ratings || [])) {
+    if (set.has(r.seat)) counts[r.rating] = (counts[r.rating] || 0) + 1;
+  }
+  return counts;
+}
+
+function findPartnerSeatFromHands(initialHands, partnerCard) {
+  if (!partnerCard) return -1;
+  const i = partnerCard.lastIndexOf(' ');
+  if (i <= 0) return -1;
+  const value = partnerCard.slice(0, i);
+  const suit = partnerCard.slice(i + 1);
+  for (let seat = 0; seat < (initialHands || []).length; seat++) {
+    const h = initialHands[seat];
+    if (h && (h[suit] || []).includes(value)) return seat;
+  }
+  return -1;
+}
+
+function totalTricks() {
+  if (!replayData) return 0;
+  let max = 0;
+  for (const e of replayData.trickLog) if (e.trickNum > max) max = e.trickNum;
+  return max;
+}
+
+function renderReplay() {
+  if (!replayData) return;
+  const r = replayData;
+  const n = totalTricks();
+  const trump = r.trumpSuit ?? r.bidSuit;
+  const bidderName = r.seatMap.find((s) => s.seat === r.bidderSeat)?.name ?? '?';
+  const tricksByTeam = `Bidder team ${r.tricksWon[r.bidderSeat]}${
+    r.winningTeam === 'bidder' ? ' ✓' : ''
+  }`;
+  const sum = r.ratingSummary || { best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+  const pill = (cls, n, label) =>
+    `<span class="rating-pill rating-${cls}" title="${label}"><span class="rating-dot"></span>${n} ${label}</span>`;
+  const compactPill = (cls, n, label) =>
+    `<span class="rating-pill rating-${cls}" title="${label}"><span class="rating-dot"></span>${n}</span>`;
+  const pillsFor = (counts) => RATING_LABELS
+    .map(([cls, label]) => compactPill(cls, counts[cls] || 0, label))
+    .join('');
+  const summaryRow = `
+    <div class="replay-summary">
+      ${pill('best', sum.best, 'best')}
+      ${pill('good', sum.good, 'good')}
+      ${pill('inaccuracy', sum.inaccuracy, 'inaccuracy')}
+      ${pill('mistake', sum.mistake, 'mistake')}
+      ${pill('blunder', sum.blunder, 'blunder')}
+    </div>`;
+
+  // Per-seat and per-team breakdown
+  const partnerSeat = findPartnerSeatFromHands(r.initialHands, r.partnerCard);
+  const isSolo = partnerSeat < 0 || partnerSeat === r.bidderSeat;
+  const bidderTeamSeats = isSolo ? [r.bidderSeat] : [r.bidderSeat, partnerSeat];
+  const oppositionSeats = [0, 1, 2, 3].filter((s) => !bidderTeamSeats.includes(s));
+  const roleOf = (seat) =>
+    seat === r.bidderSeat ? 'bidder'
+    : seat === partnerSeat ? 'partner'
+    : 'opposition';
+  const roleLabel = { bidder: 'Bidder', partner: 'Partner', opposition: 'Opposition' };
+  const teamRow = (label, seats) => `
+    <div class="replay-breakdown-row">
+      <span class="replay-breakdown-label">${esc(label)}</span>
+      <div class="replay-breakdown-pills">${pillsFor(countRatingsBySeat(r.ratings, seats))}</div>
+    </div>`;
+  const playerRow = (seat) => {
+    const name = r.seatMap.find((s) => s.seat === seat)?.name ?? `Seat ${seat}`;
+    const role = roleOf(seat);
+    return `
+    <div class="replay-breakdown-row">
+      <span class="replay-breakdown-label">
+        ${esc(name)}
+        <span class="replay-breakdown-role role-${role}">${roleLabel[role]}</span>
+      </span>
+      <div class="replay-breakdown-pills">${pillsFor(countRatingsBySeat(r.ratings, [seat]))}</div>
+    </div>`;
+  };
+  const breakdown = `
+    <div class="replay-breakdown">
+      <div class="replay-breakdown-section">
+        ${teamRow(isSolo ? 'Bidder (solo)' : 'Bidder team', bidderTeamSeats)}
+        ${teamRow('Opposition', oppositionSeats)}
+      </div>
+      <div class="replay-breakdown-section">
+        ${[0, 1, 2, 3].map(playerRow).join('')}
+      </div>
+    </div>`;
+
+  const practiceBadge = r.isPractice ? '<span class="replay-practice">Practice · unrated</span>' : '';
+  $('replay-header').innerHTML = `
+    <div class="replay-header-row">
+      <span class="replay-bid">${formatBidLabel(r.bidLevel, trump)}</span>
+      <span class="replay-bidder">Bidder: ${esc(bidderName)}</span>
+      <span class="replay-partner-card">Partner card: ${esc(r.partnerCard)}</span>
+      ${practiceBadge}
+    </div>
+    <div class="replay-header-row">
+      <span class="replay-result">${r.winningTeam === 'bidder' ? '🏆 Bidder team won' : '🛡 Opposition won'}</span>
+      <span class="replay-sets">Bidder tricks ${r.tricksWon[r.bidderSeat]} / ${r.bidLevel + 6} needed</span>
+    </div>
+    ${summaryRow}
+    ${breakdown}`;
+
+  // Progress label and button states
+  const label = replayTrickIdx === 0
+    ? `Deal · 0/${n} tricks played`
+    : `Trick ${replayTrickIdx}/${n}`;
+  $('replay-progress').textContent = label;
+  $('replay-prev').disabled = replayTrickIdx === 0;
+  $('replay-next').disabled = replayTrickIdx >= n;
+
+  renderReplayHands();
+}
+
+function renderReplayHands() {
+  const container = $('replay-hands');
+  container.innerHTML = '';
+  if (!replayData) return;
+  const r = replayData;
+
+  // Build a synthetic PlayerGameView-like object to reuse the rendering semantics
+  // from renderGameoverHands (but we slice trickLog up to replayTrickIdx).
+  const shownLog = r.trickLog.filter((e) => e.trickNum <= replayTrickIdx);
+
+  // partnerCard glow should only appear once the partner card has actually been played
+  const partnerCardRevealed = shownLog.some((e) => e.card === r.partnerCard);
+
+  // Derive partnerSeat for label (seat that played the partner card, if revealed)
+  const partnerPlay = shownLog.find((e) => e.card === r.partnerCard);
+  const partnerSeat = partnerPlay ? partnerPlay.seat : -1;
+
+  for (let seat = 0; seat < NUM_PLAYERS; seat++) {
+    const initial = r.initialHands[seat];
+    if (!initial) continue;
+    const seatName = r.seatMap.find((s) => s.seat === seat)?.name ?? `Seat ${seat}`;
+
+    const row = document.createElement('div');
+    row.className = 'gameover-hand-row';
+
+    const label = document.createElement('div');
+    label.className = 'hand-label';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = seatName;
+    label.appendChild(nameSpan);
+    const pts = calcHandPoints(initial);
+    const ptsSpan = document.createElement('span');
+    ptsSpan.className = 'hand-pts';
+    ptsSpan.textContent = `(${pts} points)`;
+    label.appendChild(ptsSpan);
+    if (seat === r.bidderSeat) {
+      const role = document.createElement('span');
+      role.className = 'hand-role bidder';
+      role.textContent = 'Bidder';
+      label.appendChild(role);
+    } else if (seat === partnerSeat && partnerSeat >= 0) {
+      const role = document.createElement('span');
+      role.className = 'hand-role partner';
+      role.textContent = 'Partner';
+      label.appendChild(role);
+    }
+    row.appendChild(label);
+
+    const cards = document.createElement('div');
+    cards.className = 'gameover-hand-cards';
+
+    // Played cards (up to current trickIdx) in trick order
+    const seatPlays = shownLog
+      .filter((e) => e.seat === seat)
+      .sort((a, b) => a.trickNum - b.trickNum || a.playOrder - b.playOrder);
+    const playedCardStrings = new Set(seatPlays.map((e) => e.card));
+
+    for (const e of seatPlays) {
+      const parsed = parseLoggedCard(e.card);
+      if (!parsed) continue;
+      const isTrump = r.trumpSuit && parsed.suit === r.trumpSuit && r.trumpSuit !== '🚫';
+      const isPartnerCard = e.card === r.partnerCard && partnerCardRevealed;
+      const isTrickWinner = r.trickWinners[e.trickNum - 1] === e.seat;
+      const el = createCardEl(parsed.value, parsed.suit, { mini: true });
+      el.classList.add(`po-${e.playOrder}`);
+      if (isTrump) el.classList.add('card-trump-fire');
+      if (isPartnerCard) el.classList.add('card-partner-glow');
+      const wrap = document.createElement('div');
+      wrap.className = 'card-win-wrap';
+      wrap.appendChild(el);
+      if (isTrickWinner) {
+        const star = document.createElement('span');
+        star.className = 'trick-star';
+        star.textContent = '✦';
+        wrap.appendChild(star);
+      }
+      const rating = (r.ratings || []).find(
+        (x) => x.trickNum === e.trickNum && x.seat === e.seat,
+      );
+      if (rating) {
+        const badge = document.createElement('span');
+        badge.className = `rating-badge rating-${rating.rating}`;
+        badge.title = rating.reason;
+        badge.textContent = ratingGlyph(rating.rating);
+        wrap.appendChild(badge);
+      }
+      cards.appendChild(wrap);
+    }
+
+    // Unplayed cards: show from the initial hand, excluding anything already played
+    for (const suit of CARD_SUITS) {
+      for (const value of (initial[suit] || [])) {
+        const cardStr = `${value} ${suit}`;
+        if (playedCardStrings.has(cardStr)) continue;
+        const el = createCardEl(value, suit, { mini: true });
+        // Faded style for unplayed at end (reuses .played styling)
+        el.classList.add('played');
+        if (cardStr === r.partnerCard && partnerCardRevealed) el.classList.add('card-partner-glow');
+        const wrap = document.createElement('div');
+        wrap.className = 'card-win-wrap';
+        wrap.appendChild(el);
+        cards.appendChild(wrap);
+      }
+    }
+    row.appendChild(cards);
+    container.appendChild(row);
+  }
+}
+
+function replayStep(delta) {
+  if (!replayData) return;
+  const n = totalTricks();
+  replayTrickIdx = Math.max(0, Math.min(n, replayTrickIdx + delta));
+  renderReplay();
+}
+
 async function showStats() {
   showScreen('screen-stats');
   statsTab = 'players';
@@ -478,6 +861,40 @@ function showLoginSection() {
   document.getElementById('login-section').classList.remove('hidden');
   document.getElementById('game-section').classList.add('hidden');
   loadTelegramWidget();
+  maybeShowDevLogin();
+}
+
+function maybeShowDevLogin() {
+  const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  const devSection = document.getElementById('dev-login-section');
+  if (!devSection) return;
+  if (!isLocal) { devSection.classList.add('hidden'); return; }
+  devSection.classList.remove('hidden');
+  const btn = document.getElementById('btn-dev-login');
+  if (btn && !btn.dataset.wired) {
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', devLogin);
+  }
+}
+
+async function devLogin() {
+  const name = (document.getElementById('input-dev-name').value || '').trim() || 'Dev User';
+  try {
+    const res = await fetch('/api/auth/dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: name }),
+    });
+    if (!res.ok) throw new Error('Dev login unavailable');
+    const { token, displayName } = await res.json();
+    authToken = token;
+    authDisplayName = displayName;
+    localStorage.setItem('authToken', token);
+    showGameSection(displayName);
+    loadLeaderboard();
+  } catch (e) {
+    alert('Dev login failed — is the server running with ALLOW_DEV_LOGIN=1?');
+  }
 }
 
 function showGameSection(name) {
@@ -497,6 +914,10 @@ function showGameSection(name) {
     if (name) nameInput.value = name;
     if (nameLabel) nameLabel.textContent = 'Your Name';
   }
+  // "Match History" only for logged-in users (the history endpoint requires a JWT)
+  const matchHistoryBtn = document.getElementById('btn-match-history');
+  if (matchHistoryBtn) matchHistoryBtn.classList.toggle('hidden', !authDisplayName);
+
   const authStatus = document.getElementById('auth-status');
   if (authDisplayName) {
     authStatus.innerHTML = `Logged in as <strong>${esc(authDisplayName)}</strong> · <a href="#" id="btn-logout">Logout</a>`;
@@ -2342,6 +2763,9 @@ $('btn-create-group').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+$('replay-prev')?.addEventListener('click', () => replayStep(-1));
+$('replay-next')?.addEventListener('click', () => replayStep(1));
 
 $('btn-join').addEventListener('click', () => {
   playerName = $('input-name').value.trim();

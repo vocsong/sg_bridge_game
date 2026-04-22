@@ -52,6 +52,14 @@
       <!-- Telegram login section (shown when not logged in) -->
       <div id="login-section">
         <div id="telegram-widget-container"></div>
+        <div id="dev-login-section" class="hidden" style="margin-top:16px;padding:12px;border:1px dashed #888;border-radius:8px">
+          <div style="font-size:12px;color:#aaa;margin-bottom:8px">Localhost dev login (not available in production)</div>
+          <div class="form-group">
+            <label for="input-dev-name">Dev display name</label>
+            <input type="text" id="input-dev-name" placeholder="e.g. Alice" maxlength="20" autocomplete="off">
+          </div>
+          <button id="btn-dev-login" class="btn btn-secondary">Dev Login</button>
+        </div>
       </div>
 
       <!-- Game section (shown after login or as guest) -->
@@ -73,8 +81,43 @@
 
         <button id="btn-join" class="btn btn-secondary">Join Game</button>
 
+        <button id="btn-match-history" class="btn btn-ghost hidden" onclick="showMatchHistory()">📜 Match History</button>
+
         <div id="auth-status" class="auth-status"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- History (my games) screen -->
+  <div id="screen-history" class="screen hidden">
+    <div class="stats-container">
+      <div class="stats-topbar">
+        <span class="stats-title">📜 Match History</span>
+        <div class="stats-topbar-right">
+          <button class="btn-link" onclick="showScreen('screen-home')">← Home</button>
+        </div>
+      </div>
+      <div id="history-list" class="history-list"></div>
+      <div id="history-footer" class="history-footer"></div>
+    </div>
+  </div>
+
+  <!-- Replay screen -->
+  <div id="screen-replay" class="screen hidden">
+    <div class="stats-container">
+      <div class="stats-topbar">
+        <span class="stats-title">🎬 Game Replay</span>
+        <div class="stats-topbar-right">
+          <button class="btn-link" onclick="showMatchHistory()">← Match History</button>
+        </div>
+      </div>
+      <div id="replay-header" class="replay-header"></div>
+      <div id="replay-controls" class="replay-controls">
+        <button id="replay-prev" class="btn btn-secondary btn-small">◀ Prev</button>
+        <span id="replay-progress" class="replay-progress"></span>
+        <button id="replay-next" class="btn btn-secondary btn-small">Next ▶</button>
+      </div>
+      <div id="replay-hands" class="gameover-hands"></div>
     </div>
   </div>
 
