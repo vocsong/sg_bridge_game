@@ -66,6 +66,9 @@ function makeState(overrides: Partial<GameState> = {}): GameState {
     spectators: [],
     firstBidder: 0,
     groupId: null,
+    trickLog: [],
+    trickWinners: [],
+    partnerRevealed: false,
     ...overrides,
   };
 }
