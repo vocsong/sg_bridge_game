@@ -1245,7 +1245,7 @@ function renderLobby(s) {
   for (const p of s.players) {
     const item = document.createElement('div');
     item.className = 'player-item';
-    const botIcon = p.isBot ? `<span class="bot-icon">${p.botLevel === 'sophisticated' ? '🎓' : p.botLevel === 'advanced' ? '🧠' : p.botLevel === 'basic' ? '🎯' : '🤖'}</span>` : '';
+    const botIcon = p.isBot ? `<span class="bot-icon">${p.isGodBot ? '⚡' : p.botLevel === 'sophisticated' ? '🎓' : p.botLevel === 'advanced' ? '🧠' : p.botLevel === 'basic' ? '🎯' : '🤖'}</span>` : '';
     const eloStr = (!p.isBot && p.elo) ? `ELO ${p.elo} · ` : '';
     const statsHtml = (!p.isBot && p.gamesPlayed)
       ? `<span class="lobby-stats">${eloStr}${p.wins}W / ${p.gamesPlayed}G</span>`
@@ -1288,12 +1288,8 @@ function renderLobby(s) {
     startBtn.classList.add('hidden');
     statusEl.classList.remove('hidden');
     statusEl.textContent = `Waiting for others to play again... (${readyCount}/${NUM_PLAYERS})`;
-    const addIntBotBtn = $('lobby-add-int-bot');
-    const addAdvBotBtn = $('lobby-add-adv-bot');
-    const addSophBotBtn = $('lobby-add-soph-bot');
-    const addBasicBotBtn = $('lobby-add-basic-bot');
-    for (const btn of [addIntBotBtn, addAdvBotBtn, addSophBotBtn, addBasicBotBtn]) {
-      if (btn) btn.classList.add('hidden');
+    for (const id of ['lobby-add-int-bot', 'lobby-add-adv-bot', 'lobby-add-soph-bot', 'lobby-add-god-bot']) {
+      const btn = $(id); if (btn) btn.classList.add('hidden');
     }
     togglePractice('lobby-practice-notice', s.isPractice);
     return;
@@ -1341,12 +1337,8 @@ function renderLobby(s) {
     }
   }
 
-  const addIntBotBtn = $('lobby-add-int-bot');
-  const addAdvBotBtn = $('lobby-add-adv-bot');
-  const addSophBotBtn = $('lobby-add-soph-bot');
-  const addBasicBotBtn = $('lobby-add-basic-bot');
-  for (const btn of [addIntBotBtn, addAdvBotBtn, addSophBotBtn, addBasicBotBtn]) {
-    if (!btn) continue;
+  for (const id of ['lobby-add-int-bot', 'lobby-add-adv-bot', 'lobby-add-soph-bot', 'lobby-add-god-bot']) {
+    const btn = $(id); if (!btn) continue;
     if (isHost && remaining > 0) btn.classList.remove('hidden');
     else btn.classList.add('hidden');
   }
