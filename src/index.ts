@@ -3,6 +3,7 @@ import { verifyTelegramAuth, signJwt, verifyJwt } from './auth';
 import { upsertUser, getUser, updateDisplayName, getLeaderboard, upsertGroup, getGroupLeaderboard } from './db';
 import { sendMessage, parseUpdate } from './telegram';
 import { getPlayerStats, getPairStats } from './stats-db';
+import { placeBet, getUserBet, getBettingLeaderboard } from './betting-db';
 
 export { GameRoom } from './game-room';
 
@@ -85,16 +86,39 @@ export default {
     }
 
     if (url.pathname === '/api/create' && request.method === 'POST') {
-      const body = await request.json<{ groupId?: string | null }>().catch(() => ({} as { groupId?: string | null }));
+      const body = await request.json<{ groupId?: string | null; groupName?: string | null; sendInvite?: boolean; fromName?: string }>().catch(() => ({} as { groupId?: string | null; groupName?: string | null; sendInvite?: boolean; fromName?: string }));
       const roomCode = generateRoomCode();
       const stub = env.GAME_ROOM.getByName(roomCode);
+      const origin = new URL(request.url).origin;
       await stub.fetch(
         new Request('https://internal/create', {
           method: 'POST',
-          body: JSON.stringify({ roomCode, groupId: body.groupId ?? null }),
+          body: JSON.stringify({ roomCode, groupId: body.groupId ?? null, groupName: body.groupName ?? null, origin }),
         }),
       );
+      if (body.sendInvite && body.groupId) {
+        const fromName = body.fromName ?? 'Someone';
+        sendMessage(
+          env.TELEGRAM_BOT_TOKEN,
+          body.groupId,
+          `🃏 <b>${fromName}</b> started a new game!\nJoin → ${origin}/#${roomCode}`,
+        ).catch(() => {});
+      }
       return Response.json({ roomCode });
+    }
+
+    if (url.pathname === '/api/send-group-invite' && request.method === 'POST') {
+      const body = await request.json<{ room: string }>().catch(() => null);
+      if (!body?.room) return new Response('Missing room', { status: 400 });
+      const stub = env.GAME_ROOM.getByName(body.room.toUpperCase());
+      const origin = new URL(request.url).origin;
+      await stub.fetch(
+        new Request('https://internal/send-group-invite', {
+          method: 'POST',
+          body: JSON.stringify({ origin }),
+        }),
+      );
+      return Response.json({ ok: true });
     }
 
     if (url.pathname === '/api/ws') {
@@ -133,7 +157,7 @@ export default {
         await stub.fetch(
           new Request('https://internal/create', {
             method: 'POST',
-            body: JSON.stringify({ roomCode, groupId: cmd.chatId }),
+            body: JSON.stringify({ roomCode, groupId: cmd.chatId, groupName: cmd.groupName, origin }),
           }),
         );
         await sendMessage(
@@ -154,7 +178,7 @@ export default {
         } else {
           const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
           const rows = data.top
-            .map((e) => `${medals[e.rank - 1] ?? `${e.rank}.`} ${e.displayName} — ${e.wins}W / ${e.gamesPlayed}G`)
+            .map((e) => `${medals[e.rank - 1] ?? `${e.rank}.`} ${e.displayName} — ELO ${e.elo} (${e.wins}W / ${e.gamesPlayed}G)`)
             .join('\n');
           await sendMessage(
             env.TELEGRAM_BOT_TOKEN,
@@ -165,6 +189,63 @@ export default {
       }
 
       return new Response(null, { status: 200 });
+    }
+
+    if (url.pathname === '/api/elo-deltas' && request.method === 'GET') {
+      const gameId = url.searchParams.get('gameId');
+      if (!gameId) return Response.json([], { status: 200 });
+      const rows = await env.DB
+        .prepare(
+          `SELECT u.display_name, eh.delta, eh.elo_before, eh.elo_after
+           FROM elo_history eh
+           JOIN users u ON u.telegram_id = eh.telegram_id
+           WHERE eh.game_id = ?`,
+        )
+        .bind(gameId)
+        .all<{ display_name: string; delta: number; elo_before: number; elo_after: number }>();
+      const result = (rows.results ?? []).map((r) => ({
+        name: r.display_name,
+        delta: r.delta,
+        eloBefore: r.elo_before,
+        eloAfter: r.elo_after,
+      }));
+      return Response.json(result);
+    }
+
+    if (url.pathname === '/api/play-time-today' && request.method === 'GET') {
+      const claims = await getAuthClaims(request, env.JWT_SECRET);
+      if (!claims) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      // Accept comma-separated telegram IDs (e.g. ?players=123,456,789)
+      const playersParam = url.searchParams.get('players') ?? claims.sub;
+      const telegramIds = playersParam.split(',').map(Number).filter((n) => n > 0);
+      if (telegramIds.length === 0 || telegramIds.length > 8) return Response.json({});
+      // Start of today in SGT (UTC+8)
+      const SGT_OFFSET = 8 * 3600;
+      const nowUnix = Math.floor(Date.now() / 1000);
+      const startOfDay = nowUnix - ((nowUnix + SGT_OFFSET) % 86400);
+      const placeholders = telegramIds.map(() => '?').join(',');
+      const rows = await env.DB
+        .prepare(
+          `SELECT gr.telegram_id, COALESCE(SUM(gm.played_at - gh.start_time), 0) AS total_seconds
+           FROM (
+             SELECT DISTINCT game_id, telegram_id
+             FROM game_records WHERE telegram_id IN (${placeholders})
+           ) gr
+           JOIN game_metadata gm ON gm.game_id = gr.game_id AND gm.played_at >= ?
+           JOIN (
+             SELECT game_id, MIN(played_at) AS start_time
+             FROM game_hands WHERE played_at >= ?
+             GROUP BY game_id
+           ) gh ON gh.game_id = gr.game_id
+           GROUP BY gr.telegram_id`,
+        )
+        .bind(...telegramIds, startOfDay, startOfDay)
+        .all<{ telegram_id: number; total_seconds: number }>();
+      const result: Record<string, number> = {};
+      for (const r of rows.results ?? []) {
+        result[String(r.telegram_id)] = r.total_seconds;
+      }
+      return Response.json(result);
     }
 
     if (url.pathname === '/api/stats' && request.method === 'GET') {
@@ -188,6 +269,73 @@ export default {
         groupName: r.group_name,
       }));
       return Response.json(groups);
+    }
+
+    // --- Betting endpoints ---
+
+    // GET /api/betting/leaderboard
+    if (url.pathname === '/api/betting/leaderboard' && request.method === 'GET') {
+      const claims = await getAuthClaims(request, env.JWT_SECRET).catch(() => null);
+      const telegramId = claims ? Number(claims.sub) : undefined;
+      const data = await getBettingLeaderboard(env.DB, telegramId);
+      return Response.json(data);
+    }
+
+    // GET /api/betting/my-bet?room=XXXX
+    if (url.pathname === '/api/betting/my-bet' && request.method === 'GET') {
+      const claims = await getAuthClaims(request, env.JWT_SECRET);
+      if (!claims) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
+      const room = url.searchParams.get('room');
+      if (!room) return Response.json({ error: 'Missing room' }, { status: 400 });
+
+      const stub = env.GAME_ROOM.getByName(room.toUpperCase());
+      const phaseRes = await stub.fetch(new Request('https://internal/phase'));
+      const { gameId } = await phaseRes.json<{ phase: string | null; gameId: string | null }>();
+
+      if (!gameId) return Response.json({ bet: null });
+
+      const bet = await getUserBet(env.DB, gameId, `tg_${claims.sub}`);
+      return Response.json({ bet });
+    }
+
+    // POST /api/betting/place
+    if (url.pathname === '/api/betting/place' && request.method === 'POST') {
+      const claims = await getAuthClaims(request, env.JWT_SECRET);
+      if (!claims) return Response.json({ error: 'Login required to bet' }, { status: 401 });
+
+      const body = await request.json<{ room: string; prediction: string; watchedSeat: number }>().catch(() => null);
+      if (!body?.room || !body.prediction) {
+        return Response.json({ error: 'Missing room or prediction' }, { status: 400 });
+      }
+      if (body.prediction !== 'win' && body.prediction !== 'lose') {
+        return Response.json({ error: 'prediction must be "win" or "lose"' }, { status: 400 });
+      }
+
+      const room = body.room.toUpperCase();
+      const stub = env.GAME_ROOM.getByName(room);
+      const phaseRes = await stub.fetch(new Request('https://internal/phase'));
+      const { phase, gameId } = await phaseRes.json<{ phase: string | null; gameId: string | null }>();
+
+      if (phase !== 'bidding') {
+        return Response.json({ error: 'Bets can only be placed during the bidding phase' }, { status: 409 });
+      }
+      if (!gameId) {
+        return Response.json({ error: 'Game not found' }, { status: 404 });
+      }
+
+      const displayName = claims.name ?? `tg_${claims.sub}`;
+      const result = await placeBet(
+        env.DB,
+        gameId,
+        `tg_${claims.sub}`,
+        displayName,
+        body.watchedSeat ?? -1,
+        body.prediction as 'win' | 'lose',
+      );
+
+      if (!result.ok) return Response.json({ error: result.reason }, { status: 409 });
+      return Response.json({ ok: true, gameId });
     }
 
     return new Response(null, { status: 404 });

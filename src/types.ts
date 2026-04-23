@@ -19,7 +19,10 @@ export interface Player {
   gamesPlayed?: number;
   isBot?: boolean;
   isGodBot?: boolean;
+  botLevel?: 'basic' | 'intermediate' | 'advanced' | 'sophisticated';
   isGroupMember?: boolean;
+  elo?: number;
+  originalPlayerId?: string; // If this bot is replacing a human, store the original player's ID
 }
 
 export interface TrickRecord {
@@ -30,13 +33,20 @@ export interface TrickRecord {
 export interface Spectator {
   id: string;
   name: string;
-  watchingSeat: number; // -1 = not yet chosen
+  watchingSeat: number; // -1 = not yet chosen, -2 = full board view, 0-3 = specific seat
 }
 
 export interface BidHistoryEntry {
   seat: number;
   name: string;
   bidNum: number | null; // null = pass
+}
+
+export interface TrickLogEntry {
+  trickNum: number;   // 1-based
+  playOrder: number;  // 1 = lead, 4 = last
+  seat: number;
+  card: string;       // e.g. "A ♠"
 }
 
 export interface GameState {
@@ -63,13 +73,32 @@ export interface GameState {
   spectators: Spectator[];
   firstBidder: number;
   groupId: string | null;
+  groupName: string | null;
+  gameStartAt: number | null;
+  partnerRevealed: boolean;
+  gameId: string;
+  readySeats: number[];
+  trickLog: TrickLogEntry[];
+  trickWinners: number[];
+  initialHands: Hand[];
+  origin: string | null;
+  pingCooldowns: { [seat: number]: number }; // timestamp of last ping per recipient seat
+  disconnectTimers: { [seat: number]: number }; // timestamp when player disconnected (0 if connected)
+  isPractice: boolean; // snapshotted at deal start; not recomputed mid-game when bots replace humans
+  abandonVote?: {
+    initiatorSeat: number;
+    initiatorId: string;
+    votes: { [seat: number]: boolean | null }; // true=yes, false=no, null=no response yet
+    expiresAt: number; // timestamp when vote expires (1 minute timeout)
+  };
 }
 
 export interface PlayerGameView {
   roomCode: string;
   phase: GamePhase;
-  players: { name: string; seat: number; connected: boolean; wins?: number; gamesPlayed?: number; isBot?: boolean; isGodBot?: boolean; isGroupMember?: boolean }[];
+  players: { name: string; seat: number; connected: boolean; wins?: number; gamesPlayed?: number; isBot?: boolean; isGodBot?: boolean; botLevel?: 'basic' | 'intermediate' | 'advanced' | 'sophisticated'; isGroupMember?: boolean; elo?: number; telegramId?: number; disconnectedAt?: number }[];
   hand: Hand | null;
+  allHands: Hand[] | null; // all 4 hands, only for full-board spectators (watchingSeat === -2)
   turn: number;
   bidder: number;
   bid: number;
@@ -89,7 +118,19 @@ export interface PlayerGameView {
   isSpectator: boolean;
   watchingSeat: number;
   groupId: string | null;
+  groupName: string | null;
+  gameStartAt: number | null;
   isGroupMember?: boolean;
+  partnerSeat: number;
+  spectators: { name: string; watchingSeat: number }[];
+  readySeats: number[];
+  allInitialHands: Hand[] | null;
+  allFinalHands: Hand[] | null;
+  /** Full trick history for recap UI (game over only). */
+  trickLog: TrickLogEntry[] | null;
+  trickWinners: number[] | null;
+  gameId: string;
+  isPractice: boolean;
 }
 
 export interface Env {

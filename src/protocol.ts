@@ -1,15 +1,24 @@
 import type { PlayerGameView, Suit } from './types';
 
 export type ClientMessage =
-  | { type: 'join'; name: string }
+  | { type: 'join'; name: string; joinAs?: 'player' | 'spectator' }
   | { type: 'bid'; bidNum: number }
   | { type: 'pass' }
   | { type: 'selectPartner'; card: string }
   | { type: 'playCard'; card: string }
   | { type: 'playAgain' }
+  | { type: 'leave' }
   | { type: 'watchSeat'; seat: number }
-  | { type: 'addBot' }
-  | { type: 'removeBot' };
+  | { type: 'addBot'; level?: 'basic' | 'intermediate' | 'advanced' | 'sophisticated' }
+  | { type: 'removeBot' }
+  | { type: 'kickPlayer'; seat: number }
+  | { type: 'startGame' }
+  | { type: 'leaveSpectator' }
+  | { type: 'joinAsPlayer' }
+  | { type: 'chat'; text: string }
+  | { type: 'pingPlayer'; seat: number }
+  | { type: 'initiateAbandon' }
+  | { type: 'respondAbandon'; accept: boolean };
 
 export type ServerMessage =
   | { type: 'state'; state: PlayerGameView }
@@ -27,4 +36,12 @@ export type ServerMessage =
   | { type: 'trickWon'; winnerSeat: number; sets: number[]; nextTurn: number; winnerName: string; trickCards: (string | null)[] }
   | { type: 'gameOver'; bidderWon: boolean; winnerNames: string[] }
   | { type: 'playerDisconnected'; seat: number; name: string }
-  | { type: 'playerReconnected'; seat: number; name: string };
+  | { type: 'playerReconnected'; seat: number; name: string }
+  | { type: 'kicked'; reason: string }
+  | { type: 'playerKicked'; seat: number; name: string }
+  | { type: 'chat'; name: string; seat: number; text: string }
+  | { type: 'playerPinged'; pinger: string; seat: number }
+  | { type: 'abandonVoteStarted'; initiatorSeat: number; initiatorName: string }
+  | { type: 'abandonVotePassed' }
+  | { type: 'abandonVoteFailed'; rejectSeat: number; rejectName: string }
+  | { type: 'abandonVotePrompt'; timeoutSeconds: number };
