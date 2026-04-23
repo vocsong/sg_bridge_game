@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { GameState, PlayerGameView, Suit, Hand, Env, TrickRecord, BidHistoryEntry, Spectator, TrickLogEntry } from './types';
 import { NUM_PLAYERS, MAX_BID, CARD_SUITS, BID_SUITS } from './types';
 import { generateHands, getBidFromNum, getNumFromBid, getValidSuits, compareCards, getNumFromValue } from './bridge';
+import { getGodBotBid, getGodBotPartnerCard, getGodBotCard } from './god-bot';
 import type { ClientMessage, ServerMessage } from './protocol';
 import { recordGameResult, getWinnerSeats } from './stats';
 import { getUser, recordGroupResult } from './db';
@@ -1243,7 +1244,9 @@ export class GameRoom extends DurableObject {
     if (state.phase === 'bidding') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
-      const bidNum = (current.botLevel === 'advanced' || current.botLevel === 'sophisticated')
+      const bidNum = current.isGodBot
+        ? getGodBotBid(state, state.turn)
+        : (current.botLevel === 'advanced' || current.botLevel === 'sophisticated')
         ? this.getBotBidAdvanced(state, state.turn)
         : this.getBotBid(state, state.turn); // basic and intermediate use same bidding
       if (bidNum !== null) {
@@ -1256,14 +1259,18 @@ export class GameRoom extends DurableObject {
     if (state.phase === 'partner') {
       const bidder = state.players[state.bidder];
       if (!bidder?.isBot) return false;
-      const card = this.getBotPartnerCard(state, state.bidder);
+      const card = bidder.isGodBot
+        ? getGodBotPartnerCard(state, state.bidder)
+        : this.getBotPartnerCard(state, state.bidder);
       await this.handleSelectPartner(state, bidder.id, card);
       return true;
     }
     if (state.phase === 'play') {
       const current = state.players[state.turn];
       if (!current?.isBot) return false;
-      const card = current.botLevel === 'sophisticated'
+      const card = current.isGodBot
+        ? getGodBotCard(state, state.turn)
+        : current.botLevel === 'sophisticated'
         ? this.getBotCardSophisticated(state, state.turn)
         : current.botLevel === 'advanced'
         ? this.getBotCardAdvanced(state, state.turn)
@@ -2615,36 +2622,43 @@ export class GameRoom extends DurableObject {
     this.ctx.waitUntil(this.scheduleBotAction());
   }
 
-  private async handleAddBot(state: GameState, playerId: string, level: 'basic' | 'intermediate' | 'advanced' | 'sophisticated' = 'intermediate'): Promise<void> {
+  private async handleAddBot(state: GameState, playerId: string, level: 'basic' | 'intermediate' | 'advanced' | 'sophisticated' | 'god' = 'god'): Promise<void> {
     if (state.phase !== 'lobby') return;
     const requestor = state.players.find((p) => p.id === playerId);
     if (!requestor || requestor.seat !== 0) return;
     if (state.players.length >= NUM_PLAYERS) return;
 
     const botSeat = state.players.length;
-    const BOT_NAME_POOL = [
-      'Ace', 'Bluff', 'Clover', 'Dealer', 'Echo',
-      'Finesse', 'Goblin', 'Hoyle', 'Ivory', 'Jinx',
-      'Knave', 'Lucky', 'Midas', 'Nova', 'Oracle',
-      'Pepper', 'Quill', 'Rogue', 'Spade', 'Thorn',
-    ];
-    const prefix = level === 'sophisticated' ? '[S] ' : level === 'advanced' ? '[A] ' : level === 'basic' ? '[B] ' : '[I] ';
-    const usedNames = new Set(state.players.map((p) => p.name));
-    // Strip prefix when checking availability so all levels share the same name pool
-    const available = BOT_NAME_POOL.filter((n) =>
-      !usedNames.has(`[B] ${n}`) && !usedNames.has(`[I] ${n}`) && !usedNames.has(`[A] ${n}`) && !usedNames.has(`[S] ${n}`),
-    );
-    const picked = available.length > 0
-      ? available[Math.floor(Math.random() * available.length)]
-      : `Bot ${botSeat}`;
-    const botName = `${prefix}${picked}`;
+    let botName: string;
+    if (level === 'god') {
+      const godNames = ['God Alpha', 'God Beta', 'God Gamma'];
+      botName = godNames[botSeat - 1] ?? `God Bot ${botSeat}`;
+    } else {
+      const BOT_NAME_POOL = [
+        'Ace', 'Bluff', 'Clover', 'Dealer', 'Echo',
+        'Finesse', 'Goblin', 'Hoyle', 'Ivory', 'Jinx',
+        'Knave', 'Lucky', 'Midas', 'Nova', 'Oracle',
+        'Pepper', 'Quill', 'Rogue', 'Spade', 'Thorn',
+      ];
+      const prefix = level === 'sophisticated' ? '[S] ' : level === 'advanced' ? '[A] ' : level === 'basic' ? '[B] ' : '[I] ';
+      const usedNames = new Set(state.players.map((p) => p.name));
+      // Strip prefix when checking availability so all levels share the same name pool
+      const available = BOT_NAME_POOL.filter((n) =>
+        !usedNames.has(`[B] ${n}`) && !usedNames.has(`[I] ${n}`) && !usedNames.has(`[A] ${n}`) && !usedNames.has(`[S] ${n}`),
+      );
+      const picked = available.length > 0
+        ? available[Math.floor(Math.random() * available.length)]
+        : `Bot ${botSeat}`;
+      botName = `${prefix}${picked}`;
+    }
     const bot: import('./types').Player = {
       id: `bot_${botSeat}`,
       name: botName,
       seat: botSeat,
       connected: true,
       isBot: true,
-      botLevel: level,
+      isGodBot: level === 'god',
+      botLevel: level !== 'god' ? level : undefined,
     };
     state.players.push(bot);
 
