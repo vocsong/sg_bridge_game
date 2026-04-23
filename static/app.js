@@ -1288,8 +1288,9 @@ function renderLobby(s) {
     startBtn.classList.add('hidden');
     statusEl.classList.remove('hidden');
     statusEl.textContent = `Waiting for others to play again... (${readyCount}/${NUM_PLAYERS})`;
-    const addGodBotBtn = $('lobby-add-god-bot');
-    if (addGodBotBtn) addGodBotBtn.classList.add('hidden');
+    for (const id of ['lobby-add-int-bot', 'lobby-add-adv-bot', 'lobby-add-soph-bot', 'lobby-add-god-bot']) {
+      const btn = $(id); if (btn) btn.classList.add('hidden');
+    }
     togglePractice('lobby-practice-notice', s.isPractice);
     return;
   }
@@ -1336,10 +1337,10 @@ function renderLobby(s) {
     }
   }
 
-  const addGodBotBtn = $('lobby-add-god-bot');
-  if (addGodBotBtn) {
-    if (isHost && remaining > 0) addGodBotBtn.classList.remove('hidden');
-    else addGodBotBtn.classList.add('hidden');
+  for (const id of ['lobby-add-int-bot', 'lobby-add-adv-bot', 'lobby-add-soph-bot', 'lobby-add-god-bot']) {
+    const btn = $(id); if (!btn) continue;
+    if (isHost && remaining > 0) btn.classList.remove('hidden');
+    else btn.classList.add('hidden');
   }
 
   togglePractice('lobby-practice-notice', s.isPractice);
